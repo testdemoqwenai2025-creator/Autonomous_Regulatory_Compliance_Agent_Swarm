@@ -1,0 +1,79 @@
+# Maritime Global Compliance Swarm
+# docker-compose up --build
+
+services:
+  # ── Database ──────────────────────────────────────
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: maritime_compliance
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── PII Anonymiser (Python) ────────────────────────
+  anonymiser:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - ./data/manifests:/data/manifests:ro
+      - ./data/output:/data/output
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["anonymise", "--manifest", "/data/manifests/sample.json", "--dry-run"]
+    profiles:
+      - tools
+
+  # ── EDI SQL Auditor (Python) ───────────────────────
+  auditor:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "edi_auditor.cli"]
+    command: ["run", "--all"]
+    profiles:
+      - tools
+
+  # ── Remediation Generator (Python) ─────────────────
+  remediation:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "remediation.cli"]
+    command: ["generate-policies", "--mode", "dry-run"]
+    profiles:
+      - tools
+
+  # ── MTTR Tracker (Golang) ─────────────────────────
+  mttr-tracker:
+    build:
+      context: ./golang
+      dockerfile: Dockerfile
+    env_file: .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

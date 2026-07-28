@@ -1,0 +1,52 @@
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#E8EDF2','primaryTextColor': '#1E3A5F','primaryBorderColor': '#5B7A99','lineColor': '#94A3B8','secondaryColor': '#F0F4F8','tertiaryColor': '#D8E0EA','fontSize': '14px'}}}%%
+flowchart TD
+    subgraph P1["\nPhase 1: Ingestion"]
+        A["FMS / EDI Data\nStream"] --> B["Raw Manifest\nIntake"]
+    end
+
+    subgraph P2["\nPhase 2: Detection"]
+        B --> C{"PII Detected?"}
+        C -->|Yes| D["Flag Fields\nfor Tokenisation"]
+        C -->|No| E["Pass to\nEDI Auditor"]
+    end
+
+    subgraph P3["\nPhase 3: Tokenisation\n(Manifest_PII_Anonymiser)"]
+        D --> F["HMAC-SHA256\nToken Vault"]
+        F --> G["Deterministic\nToken Generation"]
+        G --> H["Audit Record\nPersisted"]
+    end
+
+    subgraph P4["\nPhase 4: Audit\n(Logistics_EDI_SQL_Auditor)"]
+        E --> I{"Encryption\nCheck"}
+        I -->|Fail| J["Finding: Unencrypted\nTransmission"]
+        E --> K{"Customs\nDocs?"}
+        K -->|Missing| L["Finding: Missing\nCustoms Doc"]
+        E --> M{"EDI Format\nValid?"}
+        M -->|Fail| N["Finding: Non-Compliant\nEDI Message"]
+    end
+
+    subgraph P5["\nPhase 5: Remediation\n(Remediation_Route_Generator)"]
+        J --> O["Generate Masking\nPolicy"]
+        L --> O
+        N --> P["Update EDI\nConnection Profile"]
+        O --> Q["Apply or Stage\nPolicy"]
+        P --> R["Enforce TLS /\nRenew Certificate"]
+    end
+
+    subgraph P6["\nPhase 6: Telemetry\n(Telemetry_MTTR_Tracker)"]
+        J --> S["MTTR Event:\nidentified"]
+        Q --> T["MTTR Event:\nin_progress"]
+        R --> U["MTTR Event:\nresolved"]
+        S --> V["MTTR Report:\nAvg / P95 Hours"]
+        T --> V
+        U --> V
+    end
+
+    H --> E
+
+    style P1 fill:#F8FAFC,stroke:#94A3B8,stroke-width:1.5px
+    style P2 fill:#F3F6F9,stroke:#7B8FA3,stroke-width:1.5px
+    style P3 fill:#EDF1F5,stroke:#6B809A,stroke-width:1.5px
+    style P4 fill:#E7ECF2,stroke:#5B7590,stroke-width:1.5px
+    style P5 fill:#E1E7EF,stroke:#4B6A87,stroke-width:1.5px
+    style P6 fill:#DBE2EB,stroke:#3B5F7D,stroke-width:1.5px
