@@ -14,6 +14,7 @@
     --green: #0dd690;
     --amber: #f0b429;
     --red: #e5484d;
+    --purple: #a78bfa;
     --text: #e2e8f0;
     --text-dim: #7b8ba3;
     --card: #162038;
@@ -78,7 +79,7 @@
   /* ── Stats row ─────────────────────────── */
   .stats-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 16px;
     margin-bottom: 28px;
   }
@@ -98,6 +99,7 @@
   .stat-value.high { color: var(--amber); }
   .stat-value.ok { color: var(--green); }
   .stat-value.info { color: var(--cyan); }
+  .stat-value.purple { color: var(--purple); }
 
   /* ── Sections ───────────────────────────── */
   .section {
@@ -122,32 +124,19 @@
 
   /* ── Buttons ────────────────────────────── */
   .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: var(--navy-light);
-    color: var(--text);
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.15s;
-    font-family: inherit;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--navy-light);
+    color: var(--text); font-size: 13px; cursor: pointer;
+    transition: all 0.15s; font-family: inherit;
   }
   .btn:hover { background: var(--card-hover); border-color: var(--blue); }
   .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  .btn-primary {
-    background: var(--blue);
-    border-color: var(--blue);
-    color: #fff;
-  }
+  .btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
   .btn-primary:hover { background: var(--blue-glow); }
-
   .btn-danger { border-color: var(--red); color: var(--red); }
   .btn-danger:hover { background: rgba(229,72,77,0.12); }
-
   .btn-sm { padding: 5px 12px; font-size: 12px; }
 
   /* ── Tables ─────────────────────────────── */
@@ -159,13 +148,8 @@
 
   /* ── Badges ─────────────────────────────── */
   .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+    display: inline-block; padding: 2px 8px; border-radius: 5px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
   }
   .badge-critical { background: rgba(229,72,77,0.15); color: var(--red); }
   .badge-high { background: rgba(240,180,41,0.15); color: var(--amber); }
@@ -176,6 +160,19 @@
   .badge-in_progress { background: rgba(240,180,41,0.15); color: var(--amber); }
   .badge-compliant { background: rgba(13,214,144,0.15); color: var(--green); }
   .badge-non-compliant { background: rgba(229,72,77,0.15); color: var(--red); }
+  .badge-ok { background: rgba(13,214,144,0.15); color: var(--green); }
+  .badge-degraded { background: rgba(240,180,41,0.15); color: var(--amber); }
+  .badge-unavailable { background: rgba(229,72,77,0.15); color: var(--red); }
+  .badge-detected { background: rgba(229,72,77,0.15); color: var(--red); }
+  .badge-triaged { background: rgba(240,180,41,0.15); color: var(--amber); }
+  .badge-assigned { background: rgba(27,109,212,0.15); color: var(--blue); }
+  .badge-in_remediation { background: rgba(167,139,250,0.15); color: var(--purple); }
+  .badge-awaiting_verification { background: rgba(0,201,219,0.15); color: var(--cyan); }
+  .badge-escalated { background: rgba(229,72,77,0.2); color: #ff6b6b; }
+  .badge-verified { background: rgba(13,214,144,0.15); color: var(--green); }
+  .badge-closed { background: rgba(125,139,163,0.15); color: var(--text-dim); }
+  .badge-risk_accepted { background: rgba(240,180,41,0.15); color: var(--amber); }
+  .badge-false_positive { background: rgba(125,139,163,0.15); color: var(--text-dim); }
 
   /* ── Code / JSON ────────────────────────── */
   pre, code {
@@ -183,30 +180,19 @@
     font-size: 12px;
   }
   pre {
-    background: var(--navy);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 16px;
-    overflow-x: auto;
-    max-height: 400px;
-    white-space: pre-wrap;
-    word-break: break-word;
+    background: var(--navy); border: 1px solid var(--border);
+    border-radius: 7px; padding: 16px; overflow-x: auto;
+    max-height: 400px; white-space: pre-wrap; word-break: break-word;
   }
 
   /* ── Tabs ───────────────────────────────── */
-  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 22px; }
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 22px; overflow-x: auto; }
   .tab {
-    padding: 12px 18px;
-    font-size: 13px;
-    color: var(--text-dim);
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.15s;
-    background: none;
-    border-top: none;
-    border-left: none;
-    border-right: none;
-    font-family: inherit;
+    padding: 12px 18px; font-size: 13px; color: var(--text-dim);
+    cursor: pointer; border-bottom: 2px solid transparent;
+    transition: all 0.15s; background: none;
+    border-top: none; border-left: none; border-right: none;
+    font-family: inherit; white-space: nowrap;
   }
   .tab:hover { color: var(--text); }
   .tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
@@ -214,19 +200,14 @@
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
-  /* ── Textarea ───────────────────────────── */
-  textarea, input[type="text"] {
-    width: 100%;
-    background: var(--navy);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 12px 14px;
-    color: var(--text);
+  /* ── Textarea / Input ───────────────────── */
+  textarea, input[type="text"], select {
+    width: 100%; background: var(--navy); border: 1px solid var(--border);
+    border-radius: 7px; padding: 12px 14px; color: var(--text);
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 12px;
-    resize: vertical;
+    font-size: 12px; resize: vertical;
   }
-  textarea:focus, input:focus { outline: none; border-color: var(--blue); }
+  textarea:focus, input:focus, select:focus { outline: none; border-color: var(--blue); }
 
   .input-row { display: flex; gap: 12px; margin-bottom: 14px; align-items: flex-end; }
   .input-group { flex: 1; }
@@ -237,16 +218,10 @@
 
   /* ── Toast ──────────────────────────────── */
   .toast {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px 20px;
-    font-size: 13px;
-    z-index: 9999;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 20px; font-size: 13px;
+    z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     display: none;
   }
   .toast.show { display: block; }
@@ -260,12 +235,8 @@
   /* ── Tool grid ──────────────────────────── */
   .tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
   .tool-card {
-    background: var(--navy-light);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 18px;
-    cursor: pointer;
-    transition: all 0.15s;
+    background: var(--navy-light); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px; cursor: pointer; transition: all 0.15s;
   }
   .tool-card:hover { border-color: var(--blue); transform: translateY(-2px); }
   .tool-card h3 { font-size: 14px; margin-bottom: 6px; }
@@ -273,6 +244,68 @@
   .tool-tag { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 4px; margin-top: 10px; font-weight: 600; text-transform: uppercase; }
   .tool-tag.python { background: rgba(27,109,212,0.15); color: var(--blue); }
   .tool-tag.golang { background: rgba(0,201,219,0.15); color: var(--cyan); }
+
+  /* ── Connectivity grid ──────────────────── */
+  .conn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .conn-card {
+    background: var(--navy-light); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 18px;
+    display: flex; align-items: center; gap: 14px;
+    transition: border-color 0.2s;
+  }
+  .conn-card.ok { border-left: 3px solid var(--green); }
+  .conn-card.degraded { border-left: 3px solid var(--amber); }
+  .conn-card.unavailable { border-left: 3px solid var(--red); }
+  .conn-icon { font-size: 22px; }
+  .conn-name { font-size: 13px; font-weight: 600; }
+  .conn-detail { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .conn-latency { font-size: 11px; color: var(--cyan); margin-top: 2px; }
+
+  /* ── State diagram ──────────────────────── */
+  .state-flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 18px; }
+  .state-node {
+    padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    border: 1px solid var(--border); background: var(--navy-light);
+    text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .state-arrow { color: var(--text-dim); font-size: 14px; }
+
+  /* ── Timeline ───────────────────────────── */
+  .timeline { position: relative; padding-left: 24px; }
+  .timeline::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .tl-item { position: relative; margin-bottom: 16px; padding: 10px 14px; background: var(--navy-light); border: 1px solid var(--border); border-radius: 7px; }
+  .tl-item::before { content: ''; position: absolute; left: -20px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--blue); border: 2px solid var(--navy); }
+  .tl-item.escalated::before { background: var(--red); }
+  .tl-item.verified::before { background: var(--green); }
+  .tl-from { font-size: 11px; color: var(--text-dim); }
+  .tl-to { font-size: 14px; font-weight: 600; }
+  .tl-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+  /* ── Event type tags ───────────────────── */
+  .evt-tag {
+    display: inline-block; padding: 2px 8px; border-radius: 5px;
+    font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace;
+    background: rgba(27,109,212,0.12); color: var(--blue);
+  }
+  .evt-tag.reaction { background: rgba(167,139,250,0.12); color: var(--purple); }
+
+  /* ── Rule cards ────────────────────────── */
+  .rule-card {
+    background: var(--navy-light); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .rule-priority { font-size: 11px; font-weight: 700; color: var(--cyan); min-width: 28px; }
+  .rule-info { flex: 1; }
+  .rule-name { font-size: 13px; font-weight: 600; }
+  .rule-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .rule-count { font-size: 11px; color: var(--text-dim); }
+  .toggle-switch { position: relative; width: 40px; height: 22px; cursor: pointer; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--border); border-radius: 11px; transition: 0.2s; }
+  .toggle-slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; bottom: 3px; background: var(--text-dim); border-radius: 50%; transition: 0.2s; }
+  .toggle-switch input:checked + .toggle-slider { background: var(--green); }
+  .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); background: #fff; }
 </style>
 </head>
 <body>
@@ -311,17 +344,28 @@
       <div class="stat-label">Active Policies</div>
       <div class="stat-value ok" id="statPolicies">--</div>
     </div>
+    <div class="stat-card">
+      <div class="stat-label">Events Stored</div>
+      <div class="stat-value purple" id="statEvents">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Reactions Fired</div>
+      <div class="stat-value info" id="statReactions">--</div>
+    </div>
   </div>
 
   <!-- Tabs -->
   <div class="section">
     <div class="tabs">
       <button class="tab active" data-tab="tools">Tools</button>
+      <button class="tab" data-tab="connectivity">Connectivity</button>
       <button class="tab" data-tab="anonymiser">Anonymiser</button>
       <button class="tab" data-tab="auditor">Auditor</button>
       <button class="tab" data-tab="remediation">Remediation</button>
       <button class="tab" data-tab="mttr">MTTR Tracker</button>
       <button class="tab" data-tab="findings">Findings</button>
+      <button class="tab" data-tab="state-machine">State Machine</button>
+      <button class="tab" data-tab="event-bus">Event Bus</button>
     </div>
 
     <!-- Tools Overview -->
@@ -348,7 +392,34 @@
             <p>Buffered event ingestion with background flush. Tracks finding lifecycle phases with avg/P95 metrics.</p>
             <span class="tool-tag golang">Golang</span>
           </div>
+          <div class="tool-card" onclick="switchTab('state-machine')">
+            <h3>5. Finding State Machine</h3>
+            <p>10-state lifecycle with guard conditions, timeout SLAs, audit trail, and auto-escalation.</p>
+            <span class="tool-tag python">Python</span>
+          </div>
+          <div class="tool-card" onclick="switchTab('event-bus')">
+            <h3>6. Event Bus & Reactions</h3>
+            <p>Database-backed event store, PG LISTEN/NOTIFY, 7 autonomous reaction rules.</p>
+            <span class="tool-tag python">Python</span>
+          </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Connectivity Panel -->
+    <div class="tab-panel" id="panel-connectivity">
+      <div class="section-body">
+        <div style="display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center">
+          <button class="btn btn-primary" onclick="loadConnectivity()">
+            <span class="spinner" id="connSpinner" style="display:none"></span>
+            Run Connectivity Check
+          </button>
+          <span id="connTimestamp" style="font-size:12px; color:var(--text-dim)"></span>
+          <span style="margin-left:auto; font-size:12px; color:var(--text-dim)">GET /api/v1/system/connectivity</span>
+        </div>
+        <div id="connOverall" style="margin-bottom:16px"></div>
+        <div class="conn-grid" id="connGrid"></div>
+        <pre id="connOutput" style="margin-top:16px; display:none"></pre>
       </div>
     </div>
 
@@ -424,6 +495,89 @@
         <pre id="findingsOutput" style="margin-top:14px; display:none"></pre>
       </div>
     </div>
+
+    <!-- State Machine Panel -->
+    <div class="tab-panel" id="panel-state-machine">
+      <div class="section-body">
+        <div style="display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center">
+          <button class="btn btn-primary" onclick="loadSMDefinition()">Load State Machine</button>
+          <button class="btn" onclick="doTimeoutCheck()">Check Timeouts</button>
+          <span style="margin-left:auto; font-size:12px; color:var(--text-dim)">10 states, 18 transitions, 7 triggers</span>
+        </div>
+
+        <!-- State Flow Visual -->
+        <div id="smFlow" style="margin-bottom:18px; display:none">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px">State Flow</div>
+          <div class="state-flow" id="smFlowNodes"></div>
+        </div>
+
+        <!-- Transition Explorer -->
+        <div id="smExplorer" style="margin-bottom:18px; display:none">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px">Transition Explorer</div>
+          <div class="input-row">
+            <div class="input-group" style="max-width:300px">
+              <label>Finding ID</label>
+              <input type="text" id="smFindingId" placeholder="UUID from findings list">
+            </div>
+            <div class="input-group" style="max-width:200px">
+              <label>Target State</label>
+              <select id="smTargetState"><option value="">-- load available --</option></select>
+            </div>
+            <div class="input-group" style="max-width:180px">
+              <label>Trigger</label>
+              <select id="smTrigger"></select>
+            </div>
+            <div class="input-group" style="max-width:180px">
+              <label>Actor</label>
+              <input type="text" id="smActor" value="user:dashboard">
+            </div>
+            <div style="display:flex; gap:8px; padding-bottom:1px">
+              <button class="btn btn-primary" onclick="doTransition()" id="btnTransition" disabled>Transition</button>
+              <button class="btn" onclick="loadTimeline()" id="btnTimeline" disabled>Timeline</button>
+            </div>
+          </div>
+          <div id="smTransitionResult"></div>
+        </div>
+
+        <!-- States Table -->
+        <div id="smStatesTable" style="display:none"></div>
+
+        <!-- Timeline -->
+        <div id="smTimeline" style="display:none">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px">Transition Timeline</div>
+          <div class="timeline" id="smTimelineContent"></div>
+        </div>
+
+        <pre id="smOutput" style="margin-top:14px; display:none"></pre>
+      </div>
+    </div>
+
+    <!-- Event Bus Panel -->
+    <div class="tab-panel" id="panel-event-bus">
+      <div class="section-body">
+        <div style="display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center">
+          <button class="btn btn-primary" onclick="loadEventBusData()">Refresh Event Bus</button>
+          <button class="btn" onclick="publishTestEvent()">Publish Test Event</button>
+          <span style="margin-left:auto; font-size:12px; color:var(--text-dim)">GET /api/v1/events/stats, /api/v1/events, /api/v1/reactions/rules</span>
+        </div>
+
+        <!-- Event Bus Stats -->
+        <div id="ebStatsRow" class="stats-row" style="margin-bottom:18px"></div>
+
+        <!-- Sub-tabs for events/rules/log -->
+        <div class="tabs" style="margin-bottom:0; padding:0">
+          <button class="tab active" data-ebtab="events" onclick="switchEbTab('events')">Recent Events</button>
+          <button class="tab" data-ebtab="rules" onclick="switchEbTab('rules')">Reaction Rules</button>
+          <button class="tab" data-ebtab="reactions" onclick="switchEbTab('reactions')">Reaction Log</button>
+        </div>
+        <div id="ebPanelEvents" class="section-body" style="border: 1px solid var(--border); border-top:none; border-radius: 0 0 var(--radius) var(--radius)"></div>
+        <div id="ebPanelRules" class="section-body" style="display:none; border: 1px solid var(--border); border-top:none; border-radius: 0 0 var(--radius) var(--radius)"></div>
+        <div id="ebPanelReactions" class="section-body" style="display:none; border: 1px solid var(--border); border-top:none; border-radius: 0 0 var(--radius) var(--radius)"></div>
+
+        <pre id="ebOutput" style="margin-top:14px; display:none"></pre>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -442,10 +596,22 @@ function toast(msg, type='') {
 
 // ── Tabs ───────────────────────────────────
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+  // Auto-load data for specific tabs
+  if (name === 'connectivity') loadConnectivity();
+  if (name === 'state-machine') loadSMDefinition();
+  if (name === 'event-bus') loadEventBusData();
 }
-document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+document.querySelectorAll('.tab[data-tab]').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+// Event bus sub-tabs
+function switchEbTab(name) {
+  document.querySelectorAll('.tab[data-ebtab]').forEach(t => t.classList.toggle('active', t.dataset.ebtab === name));
+  document.getElementById('ebPanelEvents').style.display = name === 'events' ? 'block' : 'none';
+  document.getElementById('ebPanelRules').style.display = name === 'rules' ? 'block' : 'none';
+  document.getElementById('ebPanelReactions').style.display = name === 'reactions' ? 'block' : 'none';
+}
 
 // ── Health / Stats ────────────────────────
 async function loadHealth() {
@@ -474,14 +640,12 @@ async function loadStats() {
     const fData = await fRes.json();
     const pData = await pRes.json();
     const polData = await polRes.json();
-    document.getElementById('statFindings').textContent = fData.total;
-    document.getElementById('statProfiles').textContent = pData.length;
-    document.getElementById('statPolicies').textContent = polData.total;
 
-    // Count open for stat
     const openRes = await fetch(API + '/api/v1/findings?status=open&limit=1');
     const openData = await openRes.json();
     document.getElementById('statFindings').textContent = openData.total;
+    document.getElementById('statProfiles').textContent = pData.length;
+    document.getElementById('statPolicies').textContent = polData.total;
   } catch(e) { /* gateway may be starting */ }
 
   try {
@@ -489,9 +653,354 @@ async function loadStats() {
     const mData = await mRes.json();
     document.getElementById('statMTTR').textContent = mData.avg_mttr_hours?.toFixed(1) || '--';
   } catch(e) { /* MTTR tracker may be down */ }
+
+  try {
+    const ebRes = await fetch(API + '/api/v1/events/stats');
+    const ebData = await ebRes.json();
+    document.getElementById('statEvents').textContent = ebData.total_events || 0;
+  } catch(e) {}
+
+  try {
+    const reRes = await fetch(API + '/api/v1/reactions/stats');
+    const reData = await reRes.json();
+    document.getElementById('statReactions').textContent = reData.total_actions_executed || 0;
+  } catch(e) {}
 }
 
-// ── Anonymiser ─────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+//  CONNECTIVITY
+// ══════════════════════════════════════════════════════════════════════
+async function loadConnectivity() {
+  const spinner = document.getElementById('connSpinner');
+  spinner.style.display = 'inline-block';
+  try {
+    const r = await fetch(API + '/api/v1/system/connectivity');
+    const d = await r.json();
+
+    document.getElementById('connTimestamp').textContent = 'Last check: ' + d.timestamp;
+
+    // Overall status
+    const overallClass = d.status === 'ok' ? 'ok' : d.status === 'degraded' ? 'degraded' : 'unavailable';
+    document.getElementById('connOverall').innerHTML = `
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px">
+        <span class="badge badge-${overallClass}">${d.status.toUpperCase()}</span>
+        <span style="font-size:13px">Gateway v${d.gateway_version}  |  ${d.active_routes} active routes</span>
+      </div>
+    `;
+
+    // Component cards
+    const icons = {
+      database: '🗃️', anonymiser: '🔒', ner_detector: '🧠', auditor: '🔍',
+      remediation: '🔧', mttr_tracker: '📊', query_registry: '📋',
+      state_machine: '⚙️', event_bus: '📡', reaction_engine: '⚡'
+    };
+
+    let html = '';
+    for (const [key, comp] of Object.entries(d.components)) {
+      const icon = icons[key] || '📌';
+      const latency = comp.latency_ms != null ? `<div class="conn-latency">${comp.latency_ms} ms</div>` : '';
+      const detail = comp.detail ? `<div class="conn-detail">${comp.detail}</div>` : '';
+      html += `
+        <div class="conn-card ${comp.status}">
+          <div class="conn-icon">${icon}</div>
+          <div>
+            <div class="conn-name">${comp.name} <span class="badge badge-${comp.status}">${comp.status}</span></div>
+            ${detail}${latency}
+          </div>
+        </div>
+      `;
+    }
+    document.getElementById('connGrid').innerHTML = html;
+
+    // Update header status
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    dot.className = 'status-dot' + (d.status === 'ok' ? '' : d.status === 'degraded' ? ' degraded' : ' down');
+    const okCount = Object.values(d.components).filter(c => c.status === 'ok').length;
+    txt.textContent = `${okCount}/${Object.keys(d.components).length} components operational`;
+
+    toast('Connectivity check complete', d.status === 'ok' ? 'success' : '');
+  } catch(e) {
+    toast('Connectivity check failed: ' + e.message, 'error');
+  } finally {
+    spinner.style.display = 'none';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  STATE MACHINE
+// ══════════════════════════════════════════════════════════════════════
+let smDef = null;
+
+async function loadSMDefinition() {
+  try {
+    const r = await fetch(API + '/api/v1/state-machine/definition');
+    smDef = await r.json();
+
+    // State flow visual
+    document.getElementById('smFlow').style.display = 'block';
+    document.getElementById('smExplorer').style.display = 'block';
+    document.getElementById('smStatesTable').style.display = 'block';
+
+    const flowOrder = ['detected','triaged','assigned','in_remediation','awaiting_verification','verified','closed'];
+    const branchStates = [{s:'escalated',from:'assigned'},{s:'false_positive',from:'triaged'},{s:'risk_accepted',from:'triaged'}];
+    let flowHtml = '';
+    flowOrder.forEach((s, i) => {
+      flowHtml += `<div class="state-node badge-${s}">${s.replace(/_/g,' ')}</div>`;
+      if (i < flowOrder.length - 1) flowHtml += '<div class="state-arrow">→</div>';
+    });
+    // Show branch states
+    flowHtml += '  <span style="color:var(--text-dim); font-size:12px; margin-left:12px">Branches:</span>';
+    branchStates.forEach(b => {
+      flowHtml += ` <div class="state-node badge-${b.s}" style="font-size:10px; padding:4px 10px">${b.s.replace(/_/g,' ')}</div>`;
+    });
+    document.getElementById('smFlowNodes').innerHTML = flowHtml;
+
+    // States table with transitions
+    let tableHtml = '<table><tr><th>State</th><th>Valid Transitions</th><th>Triggers</th><th>Sign-off Required</th><th>Timeouts (CRIT/HIGH/MED)</th></tr>';
+    for (const state of smDef.states) {
+      const transNames = state.transitions.map(t => t.to_state.replace(/_/g,' ')).join(', ') || '—';
+      const triggers = state.transitions.flatMap(t => t.triggers).join(', ') || '—';
+      const signoff = state.transitions.some(t => t.requires_sign_off) ? '⚠️ Yes' : '—';
+      const tos = state.timeouts_hours;
+      const timeoutStr = tos ? `${tos.critical || '—'}h / ${tos.high || '—'}h / ${tos.medium || '—'}h` : '—';
+      tableHtml += `<tr>
+        <td><span class="badge badge-${state.name}">${state.name.replace(/_/g,' ')}</span></td>
+        <td style="font-size:12px">${transNames}</td>
+        <td style="font-size:11px; color:var(--text-dim)">${triggers}</td>
+        <td>${signoff}</td>
+        <td style="font-family:monospace; font-size:12px">${timeoutStr}</td>
+      </tr>`;
+    }
+    tableHtml += '</table>';
+    document.getElementById('smStatesTable').innerHTML = tableHtml;
+
+    // Enable finding explorer
+    document.getElementById('btnTransition').disabled = false;
+    document.getElementById('btnTimeline').disabled = false;
+
+    toast(`State machine loaded: ${smDef.total_states} states, ${smDef.total_transitions} transitions`, 'success');
+  } catch(e) {
+    toast('Failed to load state machine: ' + e.message, 'error');
+  }
+}
+
+async function loadAvailableTransitions() {
+  const findingId = document.getElementById('smFindingId').value.trim();
+  if (!findingId) return;
+  try {
+    const r = await fetch(API + `/api/v1/state-machine/transitions/${findingId}/available`);
+    const d = await r.json();
+    const sel = document.getElementById('smTargetState');
+    const trigSel = document.getElementById('smTrigger');
+    sel.innerHTML = `<option value="">-- current: ${d.current_state} --</option>`;
+    trigSel.innerHTML = '';
+    for (const t of d.transitions) {
+      sel.innerHTML += `<option value="${t.to_state}">${t.to_state.replace(/_/g,' ')} (${t.description})</option>`;
+    }
+    sel.onchange = () => {
+      const selected = d.transitions.find(t => t.to_state === sel.value);
+      if (selected) {
+        trigSel.innerHTML = selected.triggers.map(tr => `<option value="${tr}">${tr}</option>`).join('');
+      }
+    };
+    toast(`Loaded transitions for ${d.current_state}`, 'success');
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function doTransition() {
+  const findingId = document.getElementById('smFindingId').value.trim();
+  const targetState = document.getElementById('smTargetState').value;
+  const trigger = document.getElementById('smTrigger').value;
+  const actor = document.getElementById('smActor').value;
+  if (!findingId || !targetState || !trigger) { toast('Fill in finding ID, target state, and trigger', 'error'); return; }
+
+  try {
+    const r = await fetch(API + `/api/v1/state-machine/transitions/${findingId}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ target_state: targetState, trigger, actor, context: {} })
+    });
+    const d = await r.json();
+    const color = d.success ? 'var(--green)' : 'var(--red)';
+    document.getElementById('smTransitionResult').innerHTML = `
+      <div style="padding:14px; background:var(--navy-light); border:1px solid ${color}; border-radius:7px; margin-bottom:12px">
+        <div style="font-weight:600; color:${color}; margin-bottom:6px">${d.success ? 'Transition Successful' : 'Transition Failed'}</div>
+        <div style="font-size:12px; font-family:monospace">
+          ${d.from_state} → ${d.to_state} | trigger: ${d.trigger} | actor: ${d.actor}<br>
+          ${d.error ? 'Error: ' + d.error : ''}
+          ${d.guard_failed ? 'GUARD CONDITION FAILED' : ''}
+          ${d.auto_escalated ? 'AUTO-ESCALATED' : ''}
+          ${d.timeout_hours ? 'Timeout: ' + d.timeout_hours + 'h' : ''}
+        </div>
+      </div>
+    `;
+    toast(d.success ? `Transitioned to ${d.to_state}` : `Failed: ${d.error}`, d.success ? 'success' : 'error');
+  } catch(e) {
+    toast('Transition error: ' + e.message, 'error');
+  }
+}
+
+async function loadTimeline() {
+  const findingId = document.getElementById('smFindingId').value.trim();
+  if (!findingId) return;
+  try {
+    const r = await fetch(API + `/api/v1/state-machine/transitions/${findingId}/timeline`);
+    const d = await r.json();
+    document.getElementById('smTimeline').style.display = 'block';
+    if (d.transitions.length === 0) {
+      document.getElementById('smTimelineContent').innerHTML = '<div class="empty">No transitions recorded for this finding</div>';
+      return;
+    }
+    let html = '';
+    for (const t of d.transitions) {
+      const cls = t.to_state === 'escalated' ? 'escalated' : t.to_state === 'verified' ? 'verified' : '';
+      html += `
+        <div class="tl-item ${cls}">
+          <div class="tl-from">${t.from_state} → <span class="tl-to">${t.to_state}</span></div>
+          <div class="tl-meta">
+            Trigger: ${t.trigger} | Actor: ${t.actor} | ${t.transitioned_at}
+            ${t.auto_escalated ? '| AUTO-ESCALATED' : ''}
+            ${t.guard_failed ? '| GUARD FAILED' : ''}
+            ${t.timeout_hours ? '| Timeout: ' + t.timeout_hours + 'h' : ''}
+          </div>
+          ${Object.keys(t.context_payload || {}).length > 0 ? `<pre style="margin-top:6px; padding:8px; font-size:10px; max-height:100px">${JSON.stringify(t.context_payload, null, 2)}</pre>` : ''}
+        </div>
+      `;
+    }
+    document.getElementById('smTimelineContent').innerHTML = html;
+    toast(`Timeline: ${d.total_transitions} transitions`, 'success');
+  } catch(e) {
+    toast('Timeline error: ' + e.message, 'error');
+  }
+}
+
+async function doTimeoutCheck() {
+  try {
+    const r = await fetch(API + '/api/v1/state-machine/timeout-check', { method: 'POST' });
+    const d = await r.json();
+    toast(`Checked ${d.findings_checked} findings, ${d.auto_escalated} auto-escalated`, d.auto_escalated > 0 ? '' : 'success');
+    if (d.auto_escalated > 0) {
+      showOutput('smOutput', d);
+    }
+  } catch(e) {
+    toast('Timeout check error: ' + e.message, 'error');
+  }
+}
+
+// Auto-load available transitions when finding ID is entered
+document.getElementById('smFindingId')?.addEventListener('change', loadAvailableTransitions);
+
+// ══════════════════════════════════════════════════════════════════════
+//  EVENT BUS
+// ══════════════════════════════════════════════════════════════════════
+async function loadEventBusData() {
+  try {
+    const [statsRes, eventsRes, rulesRes] = await Promise.all([
+      fetch(API + '/api/v1/events/stats'),
+      fetch(API + '/api/v1/events?limit=30'),
+      fetch(API + '/api/v1/reactions/rules?include_disabled=true'),
+    ]);
+    const stats = await statsRes.json();
+    const events = await eventsRes.json();
+    const rules = await rulesRes.json();
+
+    // Stats row
+    document.getElementById('ebStatsRow').innerHTML = `
+      <div class="stat-card"><div class="stat-label">Total Events</div><div class="stat-value info">${stats.total_events}</div></div>
+      <div class="stat-card"><div class="stat-label">Published</div><div class="stat-value ok">${stats.events_published}</div></div>
+      <div class="stat-card"><div class="stat-label">Processed</div><div class="stat-value ok">${stats.events_processed}</div></div>
+      <div class="stat-card"><div class="stat-label">Queue Depth</div><div class="stat-value high">${stats.queue_depth}</div></div>
+      <div class="stat-card"><div class="stat-label">Transport</div><div class="stat-value" style="font-size:16px; color:var(--cyan)">${stats.transport}</div></div>
+      <div class="stat-card"><div class="stat-label">Running</div><div class="stat-value ${stats.running ? 'ok' : 'high'}">${stats.running ? 'Yes' : 'No'}</div></div>
+    `;
+
+    // Events table
+    if (events.length === 0) {
+      document.getElementById('ebPanelEvents').innerHTML = '<div class="empty">No events yet. Run an audit or publish a test event.</div>';
+    } else {
+      let html = '<table><tr><th>Type</th><th>Source</th><th>Correlation ID</th><th>Timestamp</th><th>Payload (key fields)</th></tr>';
+      for (const e of events) {
+        const payloadKeys = Object.entries(e.payload || {}).slice(0, 3).map(([k,v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' | ');
+        const isReaction = e.event_type === 'reaction.triggered';
+        html += `<tr>
+          <td><span class="evt-tag ${isReaction ? 'reaction' : ''}">${e.event_type}</span></td>
+          <td style="font-size:12px">${e.source}</td>
+          <td style="font-size:11px; color:var(--text-dim); font-family:monospace">${(e.correlation_id || '').slice(0,12)}...</td>
+          <td style="font-size:11px; color:var(--text-dim)">${(e.timestamp || '').slice(0,19)}</td>
+          <td style="font-size:11px; max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${payloadKeys}</td>
+        </tr>`;
+      }
+      html += '</table>';
+      document.getElementById('ebPanelEvents').innerHTML = html;
+    }
+
+    // Rules
+    let rulesHtml = '';
+    for (const rule of rules) {
+      rulesHtml += `
+        <div class="rule-card">
+          <div class="rule-priority">P${rule.priority}</div>
+          <div class="rule-info">
+            <div class="rule-name">${rule.name} ${rule.is_builtin ? '<span style="font-size:10px;color:var(--text-dim)">[builtin]</span>' : ''}</div>
+            <div class="rule-desc">${rule.description}</div>
+            <div class="rule-count">Events: ${rule.event_types.join(', ')} | Fired: ${rule.action_count}x | Last: ${rule.last_triggered ? rule.last_triggered.slice(0,19) : 'never'}</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" ${rule.enabled ? 'checked' : ''} onchange="toggleRule('${rule.rule_id}', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      `;
+    }
+    document.getElementById('ebPanelRules').innerHTML = rulesHtml || '<div class="empty">No reaction rules loaded</div>';
+
+    toast(`Event bus: ${stats.total_events} events, ${rules.length} rules`, 'success');
+  } catch(e) {
+    toast('Event bus load error: ' + e.message, 'error');
+  }
+}
+
+async function toggleRule(ruleId, enabled) {
+  try {
+    await fetch(API + `/api/v1/reactions/rules/${ruleId}/toggle?enabled=${enabled}`, { method: 'PUT' });
+    toast(`Rule ${ruleId} ${enabled ? 'enabled' : 'disabled'}`, 'success');
+  } catch(e) {
+    toast('Toggle failed: ' + e.message, 'error');
+  }
+}
+
+async function publishTestEvent() {
+  try {
+    const r = await fetch(API + '/api/v1/events/publish', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        event_type: 'finding.created',
+        payload: {
+          finding_id: 'test-' + Date.now(),
+          finding_ref: 'TEST-001',
+          severity: 'critical',
+          risk_category: 'pii_exposure',
+          title: 'Test event from dashboard'
+        },
+        source: 'dashboard',
+        correlation_id: 'test-' + Date.now(),
+      })
+    });
+    const d = await r.json();
+    toast(`Test event published: ${d.event_id}`, 'success');
+    loadEventBusData();
+  } catch(e) {
+    toast('Publish failed: ' + e.message, 'error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  ANONYMISER
+// ══════════════════════════════════════════════════════════════════════
 async function doScan() {
   const manifest = JSON.parse(document.getElementById('manifestInput').value);
   const r = await fetch(API + '/api/v1/anonymise/scan', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({manifest}) });
@@ -588,12 +1097,13 @@ async function loadOpenFindings() {
 async function loadFindings() {
   const r = await fetch(API + '/api/v1/findings?limit=100');
   const d = await r.json();
-  let html = '<table><tr><th>Ref</th><th>Severity</th><th>Status</th><th>Category</th><th>Title</th><th>Detected</th></tr>';
+  let html = '<table><tr><th>Ref</th><th>Severity</th><th>State</th><th>Category</th><th>Title</th><th>Detected</th></tr>';
   for (const f of d.findings) {
+    const state = f.state || f.status;
     html += `<tr>
       <td>${f.finding_ref}</td>
       <td><span class="badge badge-${f.severity}">${f.severity}</span></td>
-      <td><span class="badge badge-${f.status}">${f.status}</span></td>
+      <td><span class="badge badge-${state}">${state}</span></td>
       <td>${f.risk_category}</td>
       <td>${f.title}</td>
       <td>${f.detected_at?.slice(0,19)}</td>

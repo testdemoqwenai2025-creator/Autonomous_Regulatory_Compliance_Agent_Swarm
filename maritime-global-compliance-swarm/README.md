@@ -244,6 +244,7 @@ Frontend / Middleware / External System
 | **MTTR Proxy** | Gateway proxies `/api/v1/mttr/*` → `Go:8080` | Transparent language boundary |
 | **CORS** | `Access-Control-Allow-Origin` configurable | SPA, mobile apps |
 | **OpenAPI** | Auto-generated at `/docs` | API exploration, codegen |
+| **Connectivity Check** | `GET /api/v1/system/connectivity` | Frontend confirms backend health |
 
 ### Frontend Middleware Communication Guide
 
@@ -273,10 +274,27 @@ Golang MTTR Tracker (port 8080)
 ```
 
 **Key integration points:**
-- All 20 routes return consistent JSON with Pydantic-validated schemas
+- All 30+ routes return consistent JSON with Pydantic-validated schemas
 - Error responses follow `{"detail": "..."}` pattern (FastAPI default)
 - MTTR routes proxy transparently — the frontend never needs to know about the Golang service
 - The Python SDK (`python/client/`) provides typed models for all request/response shapes
+- **Connectivity endpoint** (`GET /api/v1/system/connectivity`) tests all 10 components with latency measurements — call this first from any frontend to confirm backend communication
+
+### Interactive Dashboard
+
+The gateway serves a built-in HTML dashboard at `/` (port 8000) with 9 tabs:
+
+| Tab | Endpoint Called | Description |
+|-----|----------------|-------------|
+| **Tools** | — | Overview of all 6 tools with click-through navigation |
+| **Connectivity** | `GET /api/v1/system/connectivity` | Live per-component health check (database, anonymiser, NER, auditor, remediation, MTTR tracker, query registry, state machine, event bus, reaction engine) with latency and status badges |
+| **Anonymiser** | `POST /api/v1/anonymise/scan`, `/api/v1/anonymise/manifest` | PII scan and tokenise manifests interactively |
+| **Auditor** | `POST /api/v1/audit/run`, `GET /api/v1/audit/profiles` | Run compliance audits by domain, view EDI profile compliance |
+| **Remediation** | `POST /api/v1/remediation/policies`, `/api/v1/remediation/edi-profiles` | Generate masking policies and update EDI profiles |
+| **MTTR Tracker** | `GET /api/v1/mttr/report`, `/api/v1/mttr/open` | MTTR avg/P95 metrics, open finding tracking |
+| **Findings** | `GET /api/v1/findings`, `/api/v1/policies`, `/api/v1/reports` | Browse findings (with new state column), policies, and reports |
+| **State Machine** | `GET /api/v1/state-machine/definition`, `POST /api/v1/state-machine/transitions/{id}` | Visual state flow, transition explorer (select finding → available transitions → execute), timeline viewer, timeout check |
+| **Event Bus** | `GET /api/v1/events/stats`, `/api/v1/events`, `/api/v1/reactions/rules` | Event bus stats, recent events table, reaction rules with enable/disable toggles, test event publisher |
 
 ---
 
