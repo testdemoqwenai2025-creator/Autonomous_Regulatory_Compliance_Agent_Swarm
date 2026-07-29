@@ -110,6 +110,24 @@ class RiskCategory(enum.Enum):
     CERT_EXPIRY = "cert_expiry"
 
 
+class FindingState(enum.Enum):
+    """Unified finding lifecycle states (replaces AuditStatus).
+
+    This is the single source of truth for finding state,
+    bridging the Python gateway and Go MTTR tracker.
+    """
+    DETECTED = "detected"
+    TRIAGED = "triaged"
+    ASSIGNED = "assigned"
+    IN_REMEDIATION = "in_remediation"
+    AWAITING_VERIFICATION = "awaiting_verification"
+    ESCALATED = "escalated"
+    RISK_ACCEPTED = "risk_accepted"
+    VERIFIED = "verified"
+    CLOSED = "closed"
+    FALSE_POSITIVE = "false_positive"
+
+
 # ── ORM Models ─────────────────────────────────────────────────────────────
 
 class AnonymisationRecord(Base):
@@ -156,6 +174,7 @@ class AuditFinding(Base):
     finding_ref = Column(String(64), unique=True, nullable=False, index=True)
     severity = Column(Enum(AuditSeverity), nullable=False, index=True)
     status = Column(Enum(AuditStatus), default=AuditStatus.OPEN, index=True)
+    state = Column(Enum(FindingState), default=FindingState.DETECTED, index=True)
     risk_category = Column(Enum(RiskCategory), nullable=False)
     title = Column(String(256), nullable=False)
     description = Column(Text, nullable=False)
@@ -167,8 +186,13 @@ class AuditFinding(Base):
     detected_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
     remediated_at = Column(DateTime(timezone=True), nullable=True)
     remediation_policy_id = Column(String(36), ForeignKey("masking_policies.id"), nullable=True)
+    # State machine context
+    assignee = Column(String(128), nullable=True)
+    current_timeout_hours = Column(Float, nullable=True)
+    state_last_changed_at = Column(DateTime(timezone=True), default=_utcnow, nullable=True)
 
     policy = relationship("MaskingPolicy")
+    transitions = relationship("FindingTransition", back_populates="finding", order_by="FindingTransition.transitioned_at")
 
 
 class EDIConnectionProfile(Base):
@@ -254,3 +278,45 @@ class ComplianceReport(Base):
     avg_mttr_hours = Column(Float, default=0.0)
     generated_at = Column(DateTime(timezone=True), default=_utcnow)
     summary = Column(Text, nullable=True)
+
+
+class FindingTransition(Base):
+    """Audit trail for every state machine transition on a finding.
+
+    Records who triggered the transition, what guard conditions
+    were evaluated, and any context metadata. This table is the
+    compliance chain-of-custody for regulatory audits.
+    """
+    __tablename__ = "finding_transitions"
+
+    id = Column(String(36), primary_key=True, default=_new_uuid)
+    finding_id = Column(String(36), ForeignKey("audit_findings.id"), nullable=False, index=True)
+    from_state = Column(String(32), nullable=False)
+    to_state = Column(String(32), nullable=False)
+    trigger = Column(String(64), nullable=False)
+    actor = Column(String(128), nullable=False)  # system, user:john.smith, timer
+    guard_failed = Column(Boolean, default=False)
+    auto_escalated = Column(Boolean, default=False)
+    timeout_hours = Column(Float, nullable=True)
+    context_payload = Column(JSON, default=dict)
+    transitioned_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    finding = relationship("AuditFinding", back_populates="transitions")
+
+
+class EventLog(Base):
+    """Persistent event log for the compliance event bus.
+
+    Stores all events published through the bus. Events are
+    also pushed via PostgreSQL LISTEN/NOTIFY in production.
+    This table serves as the durable event store.
+    """
+    __tablename__ = "event_log"
+
+    id = Column(String(36), primary_key=True, default=_new_uuid)
+    event_type = Column(String(64), nullable=False, index=True)
+    source = Column(String(64), nullable=False)
+    payload = Column(JSON, default=dict)
+    correlation_id = Column(String(36), nullable=True, index=True)
+    meta_data = Column(JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False, index=True)

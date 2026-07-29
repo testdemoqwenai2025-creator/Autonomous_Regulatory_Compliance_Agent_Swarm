@@ -44,6 +44,9 @@ from shared.models import (
     AuditStatus,
     ComplianceReport,
     EDIConnectionProfile,
+    EventLog,
+    FindingState,
+    FindingTransition,
     MaskingPolicy,
     MTTRTrackingEvent,
     PIIFieldCategory,
@@ -59,6 +62,9 @@ from edi_auditor.queries import ALL_AUDIT_QUERIES, ComplianceDomain, get_queries
 from edi_auditor.registry import QueryRegistry
 from remediation.policy_gen import PolicyGenerator
 from remediation.edi_updater import EDIProfileUpdater
+from shared.state_machine import FindingStateMachine, create_state_machine
+from shared.event_bus import EventBus, EventType
+from shared.reactions import ReactionEngine
 
 from .schemas import (
     AnonymisedField,
@@ -108,6 +114,18 @@ from .schemas import (
     UpdateQueryRequest,
     FindingMTTRResponse,
     MTTRTimelineEvent,
+    TransitionRequest,
+    TransitionResponse,
+    TransitionInfo,
+    FindingTimelineResponse,
+    StateMachineDefinition,
+    ValidTransitionsResponse,
+    TimeoutCheckResponse,
+    EventBusStatsResponse,
+    ReactionRuleInfo,
+    ReactionEngineStatsResponse,
+    PublishEventRequest,
+    EventSchema,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,6 +141,9 @@ _policy_generator: Optional[PolicyGenerator] = None
 _edi_updater: Optional[EDIProfileUpdater] = None
 _ner_detector: Optional[MaritimeNERDetector] = None
 _query_registry: Optional[QueryRegistry] = None
+_state_machine: Optional[FindingStateMachine] = None
+_event_bus: Optional[EventBus] = None
+_reaction_engine: Optional[ReactionEngine] = None
 _mttr_base_url: str = "http://localhost:8080"
 
 
@@ -136,7 +157,8 @@ def create_app(config: Optional[SwarmConfig] = None) -> FastAPI:
     """
     global _config, _session_factory, _anonymiser, _rule_engine
     global _auditor, _policy_generator, _edi_updater, _mttr_base_url
-    global _ner_detector, _query_registry
+    global _ner_detector, _query_registry, _state_machine
+    global _event_bus, _reaction_engine
 
     _config = config or SwarmConfig.from_env()
 
@@ -161,6 +183,14 @@ def create_app(config: Optional[SwarmConfig] = None) -> FastAPI:
     _ner_detector = MaritimeNERDetector()
     _query_registry = QueryRegistry(_session_factory)
     _query_registry.seed_defaults()
+
+    # State machine + Event bus + Reaction engine
+    _state_machine = create_state_machine()
+    is_postgres = _config.database.driver != "sqlite"
+    _event_bus = EventBus(_session_factory, is_postgres=is_postgres)
+    _reaction_engine = ReactionEngine(_event_bus, _state_machine, _session_factory)
+    _reaction_engine.register_builtin_rules()
+    _event_bus.start()
 
     # MTTR tracker URL (Golang service)
     _mttr_base_url = os.getenv(
@@ -209,6 +239,8 @@ def create_app(config: Optional[SwarmConfig] = None) -> FastAPI:
     _register_remediation_routes(app)
     _register_mttr_routes(app)
     _register_query_routes(app)
+    _register_state_machine_routes(app)
+    _register_event_bus_routes(app)
 
     return app
 
@@ -406,15 +438,71 @@ def _register_connectivity_route(app: FastAPI):
             if hasattr(r, "methods") and hasattr(r, "path")
         )
 
+        # 8. State Machine
+        t0 = time.monotonic()
+        try:
+            _state_machine.get_full_definition()
+            sm_status = "ok"
+        except Exception:
+            sm_status = "unavailable"
+            all_ok = False
+        sm_latency = round((time.monotonic() - t0) * 1000, 2)
+        sm_component = ComponentStatus(
+            name="State Machine",
+            status=sm_status,
+            latency_ms=sm_latency,
+            detail=f"{len(_state_machine.get_full_definition()['states'])} states, {_state_machine.get_full_definition()['total_transitions']} transitions",
+        )
+        components["state_machine"] = sm_component
+
+        # 9. Event Bus
+        t0 = time.monotonic()
+        try:
+            eb_stats = _event_bus.get_statistics()
+            eb_status = "ok" if eb_stats["running"] else "degraded"
+        except Exception as e:
+            eb_status = "unavailable"
+            all_ok = False
+            eb_stats = {}
+        eb_latency = round((time.monotonic() - t0) * 1000, 2)
+        eb_component = ComponentStatus(
+            name="Event Bus",
+            status=eb_status,
+            latency_ms=eb_latency,
+            detail=f"{eb_stats.get('transport', 'unknown')}, {eb_stats.get('total_events', 0)} events stored",
+        )
+        components["event_bus"] = eb_component
+
+        # 10. Reaction Engine
+        t0 = time.monotonic()
+        try:
+            re_stats = _reaction_engine.get_statistics()
+            re_status = "ok"
+        except Exception:
+            re_status = "unavailable"
+            all_ok = False
+            re_stats = {}
+        re_latency = round((time.monotonic() - t0) * 1000, 2)
+        re_component = ComponentStatus(
+            name="Reaction Engine",
+            status=re_status,
+            latency_ms=re_latency,
+            detail=f"{re_stats.get('enabled_rules', 0)} active rules, {re_stats.get('total_actions_executed', 0)} actions fired",
+        )
+        components["reaction_engine"] = re_component
+
         return ConnectivityResponse(
             status=overall,
             timestamp=ts,
-            gateway_version="1.1.0",
+            gateway_version="2.0.0",
             components=components,
             database=database_status,
             ner_layers=_ner_detector.layers_available,
             mttr_proxy=mttr_component,
             query_registry=registry_component,
+            state_machine=sm_component,
+            event_bus=eb_component,
+            reaction_engine=re_component,
             active_routes=active_routes,
             total_routes=total_routes,
         )
@@ -1197,6 +1285,7 @@ def _register_query_routes(app: FastAPI):
                         "finding_ref": f.finding_ref,
                         "severity": f.severity.value if f.severity else None,
                         "status": f.status.value if f.status else None,
+                        "state": f.state.value if f.state else None,
                         "risk_category": f.risk_category.value if f.risk_category else None,
                         "title": f.title,
                         "description": f.description,
@@ -1206,6 +1295,9 @@ def _register_query_routes(app: FastAPI):
                         "edi_standard": f.edi_standard.value if f.edi_standard else None,
                         "detected_at": f.detected_at.isoformat() if f.detected_at else None,
                         "remediated_at": f.remediated_at.isoformat() if f.remediated_at else None,
+                        "assignee": f.assignee,
+                        "current_timeout_hours": f.current_timeout_hours,
+                        "state_last_changed_at": f.state_last_changed_at.isoformat() if f.state_last_changed_at else None,
                     }
                     for f in findings
                 ],
@@ -1289,3 +1381,370 @@ def _register_query_routes(app: FastAPI):
                 )
                 for r in reports
             ]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  5. STATE MACHINE
+# ══════════════════════════════════════════════════════════════════════════
+
+def _register_state_machine_routes(app: FastAPI):
+
+    @app.get(
+        "/api/v1/state-machine/definition",
+        response_model=StateMachineDefinition,
+        tags=["5. State Machine"],
+    )
+    async def sm_definition():
+        """Get the complete state machine definition.
+
+        Returns all states, valid transitions, timeout rules,
+        triggers, and actors. Use this to render a state
+        diagram in the frontend.
+        """
+        return _state_machine.get_full_definition()
+
+    @app.get(
+        "/api/v1/state-machine/transitions/{finding_id}/available",
+        response_model=ValidTransitionsResponse,
+        tags=["5. State Machine"],
+    )
+    async def sm_available_transitions(finding_id: str):
+        """Get valid transitions from a finding's current state."""
+        with _session_factory() as session:
+            finding = session.query(AuditFinding).filter(
+                AuditFinding.id == finding_id
+            ).first()
+            if not finding:
+                raise HTTPException(status_code=404, detail=f"Finding '{finding_id}' not found")
+
+            current = finding.state.value if finding.state else "detected"
+            transitions = _state_machine.get_valid_transitions(current)
+
+            return ValidTransitionsResponse(
+                current_state=current,
+                transitions=transitions,
+            )
+
+    @app.post(
+        "/api/v1/state-machine/transitions/{finding_id}",
+        response_model=TransitionResponse,
+        responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+        tags=["5. State Machine"],
+    )
+    async def sm_transition(finding_id: str, req: TransitionRequest):
+        """Transition a finding to a new state.
+
+        Validates the transition against the state machine definition,
+        enforces guard conditions, records the transition audit trail,
+        and emits events for the reaction engine.
+        """
+        with _session_factory() as session:
+            finding = session.query(AuditFinding).filter(
+                AuditFinding.id == finding_id
+            ).first()
+            if not finding:
+                raise HTTPException(status_code=404, detail=f"Finding '{finding_id}' not found")
+
+            current = finding.state.value if finding.state else "detected"
+            severity = finding.severity.value if finding.severity else "medium"
+
+            result = _state_machine.transition(
+                finding_id=finding_id,
+                current_state=current,
+                target_state=req.target_state.value,
+                trigger=req.trigger,
+                actor=req.actor,
+                context={
+                    **req.context,
+                    "severity": severity,
+                    "finding_ref": finding.finding_ref,
+                    "risk_category": finding.risk_category.value if finding.risk_category else None,
+                },
+                severity=severity,
+                session=session,
+            )
+
+            if result.success:
+                # Update finding state
+                finding.state = FindingState(req.target_state.value)
+                finding.state_last_changed_at = datetime.now(timezone.utc)
+                finding.current_timeout_hours = result.timeout_hours
+                if req.context.get("assignee"):
+                    finding.assignee = req.context["assignee"]
+
+                # Map state to legacy status for backward compatibility
+                state_to_status = {
+                    "detected": AuditStatus.OPEN,
+                    "triaged": AuditStatus.IN_PROGRESS,
+                    "assigned": AuditStatus.IN_PROGRESS,
+                    "in_remediation": AuditStatus.IN_PROGRESS,
+                    "awaiting_verification": AuditStatus.REMEDIATED,
+                    "escalated": AuditStatus.IN_PROGRESS,
+                    "risk_accepted": AuditStatus.ACCEPTED_RISK,
+                    "verified": AuditStatus.REMEDIATED,
+                    "closed": AuditStatus.REMEDIATED,
+                    "false_positive": AuditStatus.FALSE_POSITIVE,
+                }
+                finding.status = state_to_status.get(req.target_state.value, AuditStatus.OPEN)
+
+                session.commit()
+
+                # Emit event to the bus
+                _event_bus.publish(
+                    EventType.FINDING_STATE_CHANGED,
+                    payload={
+                        "finding_id": finding_id,
+                        "finding_ref": finding.finding_ref,
+                        "from_state": current,
+                        "to_state": req.target_state.value,
+                        "trigger": req.trigger,
+                        "actor": req.actor,
+                        "severity": severity,
+                        "risk_category": finding.risk_category.value if finding.risk_category else None,
+                        "title": finding.title,
+                    },
+                    source="state_machine",
+                    correlation_id=finding_id,
+                )
+
+                # Process events synchronously for immediate reactions
+                _event_bus.process_pending()
+
+            return TransitionResponse(
+                success=result.success,
+                finding_id=result.finding_id,
+                from_state=result.from_state,
+                to_state=result.to_state,
+                trigger=result.trigger,
+                actor=result.actor,
+                transition_id=result.transition_id,
+                error=result.error,
+                guard_failed=result.guard_failed,
+                auto_escalated=result.auto_escalated,
+                timeout_hours=result.timeout_hours,
+                context=result.context,
+            )
+
+    @app.get(
+        "/api/v1/state-machine/transitions/{finding_id}/timeline",
+        response_model=FindingTimelineResponse,
+        tags=["5. State Machine"],
+    )
+    async def sm_timeline(finding_id: str):
+        """Get the full state transition timeline for a finding."""
+        with _session_factory() as session:
+            finding = session.query(AuditFinding).filter(
+                AuditFinding.id == finding_id
+            ).first()
+            if not finding:
+                raise HTTPException(status_code=404, detail=f"Finding '{finding_id}' not found")
+
+            transitions = (
+                session.query(FindingTransition)
+                .filter(FindingTransition.finding_id == finding_id)
+                .order_by(FindingTransition.transitioned_at.asc())
+                .all()
+            )
+
+            return FindingTimelineResponse(
+                finding_id=finding_id,
+                current_state=finding.state.value if finding.state else "detected",
+                total_transitions=len(transitions),
+                transitions=[
+                    TransitionInfo(
+                        id=t.id,
+                        from_state=t.from_state,
+                        to_state=t.to_state,
+                        trigger=t.trigger,
+                        actor=t.actor,
+                        guard_failed=t.guard_failed,
+                        auto_escalated=t.auto_escalated,
+                        timeout_hours=t.timeout_hours,
+                        context_payload=t.context_payload or {},
+                        transitioned_at=t.transitioned_at.isoformat() if t.transitioned_at else "",
+                    )
+                    for t in transitions
+                ],
+            )
+
+    @app.post(
+        "/api/v1/state-machine/timeout-check",
+        response_model=TimeoutCheckResponse,
+        tags=["5. State Machine"],
+    )
+    async def sm_check_timeouts():
+        """Check all open findings for timeout breaches and auto-escalate.
+
+        This is the entry point for the SLA enforcement mechanism.
+        Call periodically (e.g., every 5 minutes) or on-demand.
+        """
+        with _session_factory() as session:
+            # Find all non-terminal findings
+            terminal_states = {"closed", "false_positive"}
+            findings = (
+                session.query(AuditFinding)
+                .filter(AuditFinding.state.isnot(None))
+                .all()
+            )
+
+            finding_dicts = [
+                {
+                    "id": f.id,
+                    "state": f.state.value if f.state else "detected",
+                    "severity": f.severity.value if f.severity else "medium",
+                    "detected_at": f.state_last_changed_at or f.detected_at,
+                    "finding_ref": f.finding_ref,
+                }
+                for f in findings
+                if f.state and f.state.value not in terminal_states
+            ]
+
+            escalations = _state_machine.check_timeouts(finding_dicts, session)
+
+            # Update findings that were escalated
+            for esc in escalations:
+                if esc.success:
+                    finding = session.query(AuditFinding).filter(
+                        AuditFinding.id == esc.finding_id
+                    ).first()
+                    if finding:
+                        finding.state = FindingState.ESCALATED
+                        finding.state_last_changed_at = datetime.now(timezone.utc)
+
+                        # Emit timeout breach event
+                        _event_bus.publish(
+                            EventType.FINDING_TIMEOUT_BREACH,
+                            payload={
+                                "finding_id": esc.finding_id,
+                                "from_state": esc.from_state,
+                                "to_state": "escalated",
+                                "severity": esc.context.get("severity", "medium"),
+                                "elapsed_hours": esc.context.get("elapsed_hours"),
+                                "timeout_hours": esc.context.get("timeout_hours"),
+                            },
+                            source="state_machine",
+                            correlation_id=esc.finding_id,
+                        )
+
+            session.commit()
+            _event_bus.process_pending()
+
+            return TimeoutCheckResponse(
+                findings_checked=len(finding_dicts),
+                auto_escalated=len(escalations),
+                escalations=[
+                    TransitionResponse(
+                        success=e.success,
+                        finding_id=e.finding_id,
+                        from_state=e.from_state,
+                        to_state=e.to_state,
+                        trigger=e.trigger,
+                        actor=e.actor,
+                        transition_id=e.transition_id,
+                        auto_escalated=e.auto_escalated,
+                        context=e.context,
+                    )
+                    for e in escalations
+                ],
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  6. EVENT BUS & REACTION ENGINE
+# ══════════════════════════════════════════════════════════════════════════
+
+def _register_event_bus_routes(app: FastAPI):
+
+    @app.get(
+        "/api/v1/events/stats",
+        response_model=EventBusStatsResponse,
+        tags=["6. Event Bus"],
+    )
+    async def event_bus_stats():
+        """Get event bus statistics including transport mode and queue depth."""
+        stats = _event_bus.get_statistics()
+        return EventBusStatsResponse(**stats)
+
+    @app.get(
+        "/api/v1/events",
+        response_model=list[EventSchema],
+        tags=["6. Event Bus"],
+    )
+    async def list_events(
+        event_type: Optional[str] = Query(None),
+        correlation_id: Optional[str] = Query(None),
+        limit: int = Query(50, ge=1, le=200),
+    ):
+        """List recent events from the event store.
+
+        Supports filtering by event type and correlation ID.
+        """
+        events = _event_bus._store.get_recent(
+            event_type=event_type,
+            correlation_id=correlation_id,
+            limit=limit,
+        )
+        return [EventSchema(**e.to_dict()) for e in events]
+
+    @app.post(
+        "/api/v1/events/publish",
+        tags=["6. Event Bus"],
+    )
+    async def publish_event(req: PublishEventRequest):
+        """Manually publish an event to the bus.
+
+        Useful for testing reactions and integrating external systems.
+        """
+        event = _event_bus.publish(
+            event_type=req.event_type,
+            payload=req.payload,
+            source=req.source,
+            correlation_id=req.correlation_id,
+            metadata=req.metadata,
+        )
+        _event_bus.process_pending()
+        return {"event_id": event.event_id, "status": "published"}
+
+    @app.get(
+        "/api/v1/reactions/rules",
+        response_model=list[ReactionRuleInfo],
+        tags=["6. Event Bus"],
+    )
+    async def list_reaction_rules(
+        include_disabled: bool = Query(False),
+    ):
+        """List all reaction rules with their status and execution counts."""
+        rules = _reaction_engine.get_rules(include_disabled=include_disabled)
+        return [ReactionRuleInfo(**r) for r in rules]
+
+    @app.get(
+        "/api/v1/reactions/stats",
+        response_model=ReactionEngineStatsResponse,
+        tags=["6. Event Bus"],
+    )
+    async def reaction_stats():
+        """Get reaction engine statistics."""
+        stats = _reaction_engine.get_statistics()
+        return ReactionEngineStatsResponse(**stats)
+
+    @app.get(
+        "/api/v1/reactions/log",
+        tags=["6. Event Bus"],
+    )
+    async def reaction_log(limit: int = Query(20, ge=1, le=100)):
+        """Get recent reaction execution log."""
+        return _reaction_engine.get_recent_reactions(limit=limit)
+
+    @app.put(
+        "/api/v1/reactions/rules/{rule_id}/toggle",
+        tags=["6. Event Bus"],
+    )
+    async def toggle_reaction_rule(rule_id: str, enabled: bool = Query(...)):
+        """Enable or disable a specific reaction rule."""
+        if enabled:
+            ok = _reaction_engine.enable_rule(rule_id)
+        else:
+            ok = _reaction_engine.disable_rule(rule_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Rule '{rule_id}' not found")
+        return {"rule_id": rule_id, "enabled": enabled}

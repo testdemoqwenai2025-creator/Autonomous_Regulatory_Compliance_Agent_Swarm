@@ -1,51 +1,57 @@
 # Maritime Global Compliance Swarm
 
-> Autonomous regulatory compliance agent swarm for global maritime freight. Automates GDPR/PII anonymisation, EDI compliance audits, remediation policy generation, and MTTR telemetry — all exposed via a unified Python FastAPI gateway with an interactive HTML dashboard.
+> Autonomous regulatory compliance agent swarm for global maritime freight. Automates GDPR/PII anonymisation, EDI compliance audits, remediation policy generation, MTTR telemetry, finding state machine governance, and event-driven reactive compliance — all exposed via a unified Python FastAPI gateway with an interactive HTML dashboard.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                  Maritime Compliance Swarm                     │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────────────┐  ┌──────────────────────────────┐    │
-│  │ Manifest_PII_        │  │ Logistics_EDI_SQL_           │    │
-│  │ Anonymiser     [Py]  │  │ Auditor               [Py]  │    │
-│  │                      │  │                              │    │
-│  │ • HMAC-SHA256 tokens │  │ • 11 audit queries          │    │
-│  │ • Fernet encryption  │  │ • 5 compliance domains      │    │
-│  │ • Multi-jurisdiction │  │ • EDI profile scanning      │    │
-│  └──────────┬───────────┘  └──────────┬───────────────────┘    │
-│             │                         │                        │
-│             ▼                         ▼                        │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │              Shared Compliance Database                  │  │
-│  │         (SQLite dev / PostgreSQL + PostGIS prod)         │  │
-│  │                                                         │  │
-│  │  • anonymisation_records  • audit_findings              │  │
-│  │  • masking_policies      • edi_connection_profiles      │  │
-│  │  • mttr_events           • compliance_reports           │  │
-│  └──────────┬──────────────────────────┬────────────────────┘  │
-│             │                          │                        │
-│             ▼                          ▼                        │
-│  ┌──────────────────────┐  ┌──────────────────────────────┐    │
-│  │ Remediation_Route_   │  │ Telemetry_MTTR_             │    │
-│  │ Generator      [Py]  │  │ Tracker                [Go] │    │
-│  │                      │  │                              │    │
-│  │ • Policy generation  │  │ • Buffered event ingestion  │    │
-│  │ • EDI profile updates│  │ • HTTP REST API             │    │
-│  │ • Decision matrix    │  │ • MTTR metrics (avg/P95)    │    │
-│  └──────────────────────┘  └──────────────────────────────┘    │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │          FastAPI Gateway + HTML Dashboard          [Py] │  │
-│  │          Port 8000 — 20 REST routes + /docs             │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Maritime Compliance Swarm v2.0                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌──────────────────────┐  ┌──────────────────────────────┐          │
+│  │ Manifest_PII_        │  │ Logistics_EDI_SQL_           │          │
+│  │ Anonymiser     [Py]  │  │ Auditor               [Py]  │          │
+│  │ • HMAC-SHA256 tokens │  │ • 11 audit queries          │          │
+│  │ • Fernet encryption  │  │ • 5 compliance domains      │          │
+│  │ • ML NER (spaCy)     │  │ • Pluggable query registry   │          │
+│  └──────────┬───────────┘  └──────────┬───────────────────┘          │
+│             │                         │                              │
+│             ▼                         ▼                              │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │              Shared Compliance Database                   │       │
+│  │         (SQLite dev / PostgreSQL + PostGIS prod)          │       │
+│  │                                                           │       │
+│  │  • anonymisation_records  • audit_findings                │       │
+│  │  • masking_policies      • edi_connection_profiles        │       │
+│  │  • mttr_events           • compliance_reports             │       │
+│  │  • finding_transitions   • event_log   ★ NEW              │       │
+│  │  • audit_query_registry                                │       │
+│  └──────────┬────────────────────────┬─────────────────────────┘       │
+│             │                        │                                  │
+│             ▼                        ▼                                  │
+│  ┌──────────────────────┐  ┌──────────────────────────────┐            │
+│  │ Remediation_Route_   │  │ Telemetry_MTTR_             │            │
+│  │ Generator      [Py]  │  │ Tracker                [Go] │            │
+│  │ • Decision matrix    │  │ • Buffered event ingestion  │            │
+│  │ • EDI profile updates│  │ • MTTR metrics (avg/P95)    │            │
+│  └──────────────────────┘  └──────────────────────────────┘            │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │  ★ Finding State Machine    ★ Event Bus                   │       │
+│  │  10 states, 20+ transitions, guard conditions           │       │
+│  │  ★ Reaction Engine — 7 autonomous rules                  │       │
+│  │  PostgreSQL LISTEN/NOTIFY (prod) / in-process (dev)      │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │          FastAPI Gateway + HTML Dashboard          [Py]  │       │
+│  │          Port 8000 — 30+ REST routes + /docs             │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -87,15 +93,16 @@ make gateway
 
 ---
 
-## API Reference (20 routes)
+## API Reference (30+ routes)
 
-The FastAPI gateway exposes all four tools under a unified REST API. Interactive documentation is available at `/docs` (Swagger) and `/redoc` (ReDoc) when the gateway is running.
+The FastAPI gateway exposes all tools plus the state machine, event bus, and reaction engine under a unified REST API. Interactive documentation is available at `/docs` (Swagger) and `/redoc` (ReDoc) when the gateway is running.
 
-### Health
+### Health & Connectivity
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Liveness probe — status of all four tools |
+| GET | `/health` | Liveness probe — status of all tools |
+| GET | `/api/v1/system/connectivity` | Full connectivity diagnostics for frontend (10 components) |
 
 ### 1. PII Anonymiser
 
@@ -154,9 +161,49 @@ curl -X POST http://localhost:8000/api/v1/anonymise/manifest \
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/findings` | List audit findings (filter by severity, status, risk) |
+| GET | `/api/v1/findings` | List audit findings (filter by severity, status, state, risk) |
 | GET | `/api/v1/policies` | List masking policies |
 | GET | `/api/v1/reports` | List compliance reports |
+
+### 5. Finding State Machine ★ NEW
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/state-machine/definition` | Full state machine (10 states, 20+ transitions, timeouts) |
+| GET | `/api/v1/state-machine/transitions/{id}/available` | Valid next states for a finding |
+| POST | `/api/v1/state-machine/transitions/{id}` | Execute a state transition (with guards, audit) |
+| GET | `/api/v1/state-machine/transitions/{id}/timeline` | Full transition history for a finding |
+| POST | `/api/v1/state-machine/timeout-check` | Check all findings for SLA breaches, auto-escalate |
+
+**Example — Transition a finding:**
+```bash
+curl -X POST http://localhost:8000/api/v1/state-machine/transitions/{finding_id} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "target_state": "assigned",
+    "trigger": "manual_assign",
+    "actor": "user:john.smith",
+    "context": {"assignee": "compliance-team-lead"}
+  }'
+```
+
+**Example — Timeout check (auto-escalation):**
+```bash
+curl -X POST http://localhost:8000/api/v1/state-machine/timeout-check
+# Returns: findings checked, auto-escalated count, escalation details
+```
+
+### 6. Event Bus & Reaction Engine ★ NEW
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/events/stats` | Event bus statistics (transport, queue depth, counts) |
+| GET | `/api/v1/events` | List recent events (filter by type, correlation ID) |
+| POST | `/api/v1/events/publish` | Manually publish an event (testing, integration) |
+| GET | `/api/v1/reactions/rules` | List all 7 reaction rules with status |
+| GET | `/api/v1/reactions/stats` | Reaction engine statistics |
+| GET | `/api/v1/reactions/log` | Recent reaction execution log |
+| PUT | `/api/v1/reactions/rules/{id}/toggle` | Enable/disable a specific reaction rule |
 
 ---
 
@@ -273,11 +320,14 @@ api.close()
 
 | Tool | Language | Purpose |
 |------|----------|---------|
-| **Manifest_PII_Anonymiser** | Python | HMAC-SHA256 deterministic tokenisation, Fernet encryption, multi-jurisdiction rules (GDPR, CCPA, LGPD, PDPA, PIPA) |
-| **Logistics_EDI_SQL_Auditor** | Python | 11 parametric SQL queries across 5 compliance domains, finding persistence |
-| **Remediation_Route_Generator** | Python | Decision matrix mapping risk categories to masking actions, EDI profile updater |
+| **Manifest_PII_Anonymiser** | Python | HMAC-SHA256 deterministic tokenisation, Fernet encryption, multi-jurisdiction rules (GDPR, CCPA, LGPD, PDPA, PIPA), ML NER (spaCy) |
+| **Logistics_EDI_SQL_Auditor** | Python | 11 parametric SQL queries, 5 compliance domains, pluggable query registry, finding persistence |
+| **Remediation_Route_Generator** | Python | Decision matrix mapping risk categories to masking actions, EDI profile updater, state machine integration |
 | **Telemetry_MTTR_Tracker** | Golang | Buffered event ingestion with background flush, MTTR avg/P95 metrics |
-| **API Gateway + Dashboard** | Python (FastAPI) | Unified REST API, static HTML dashboard, OpenAPI docs |
+| **Finding State Machine** | Python | 10-state lifecycle with guard conditions, timeout SLAs, audit trail, legacy bridge |
+| **Event Bus** | Python | Database-backed event store, PostgreSQL LISTEN/NOTIFY, in-process queue (dev) |
+| **Reaction Engine** | Python | 7 autonomous reaction rules, priority-based evaluation, runtime toggle |
+| **API Gateway + Dashboard** | Python (FastAPI) | Unified REST API (30+ routes), static HTML dashboard, OpenAPI docs |
 
 ---
 
@@ -333,22 +383,28 @@ make docker-down      # Stop all Docker services
 ```
 maritime-global-compliance-swarm/
 ├── python/
-│   ├── shared/              # Config, ORM models (6 tables, 7 enums), database layer
+│   ├── shared/              # Config, ORM models (9 tables, 8 enums), database layer
+│   │   ├── models.py        # 9 ORM tables including finding_transitions, event_log
+│   │   ├── state_machine.py # ★ 10-state finding lifecycle, guard conditions, timeouts
+│   │   ├── event_bus.py     # ★ Event store, pub/sub, PG LISTEN/NOTIFY
+│   │   └── reactions.py     # ★ 7 autonomous reaction rules engine
 │   ├── anonymiser/          # Manifest_PII_Anonymiser
 │   │   ├── tokeniser.py     # HMAC vault, Fernet encryptor, PII engine
 │   │   ├── rules.py         # PII detection rules (5 jurisdictions)
+│   │   ├── ner_detector.py  # ML NER (spaCy + maritime regex patterns)
 │   │   └── cli.py           # Click CLI
 │   ├── edi_auditor/         # Logistics_EDI_SQL_Auditor
 │   │   ├── queries.py       # 11 parametric audit queries
+│   │   ├── registry.py      # ★ Pluggable, versioned, DB-backed query registry
 │   │   ├── auditor.py       # Query executor + finding persister
 │   │   └── cli.py           # Click CLI
 │   ├── remediation/         # Remediation_Route_Generator
-│   │   ├── policy_gen.py    # Decision matrix + policy creation
+│   │   ├── policy_gen.py    # Decision matrix + policy creation + state machine
 │   │   ├── edi_updater.py   # EDI profile security updates
 │   │   └── cli.py           # Click CLI
 │   ├── gateway/             # FastAPI gateway
-│   │   ├── app.py           # 20 REST routes + static file serving
-│   │   ├── schemas.py       # 30+ Pydantic request/response models
+│   │   ├── app.py           # ★ 30+ REST routes + state machine + event bus
+│   │   ├── schemas.py       # 50+ Pydantic request/response models
 │   │   └── static/           # HTML dashboard (index.html)
 │   ├── client/              # Python SDK for frontend integration
 │   │   ├── sync_client.py   # Typed httpx client wrapping all endpoints
@@ -382,14 +438,52 @@ maritime-global-compliance-swarm/
 
 See `docs/workflow_diagram.mmd` (Mermaid) or `docs/workflow_diagram.png` (rendered).
 
-The swarm operates in 6 phases:
+The swarm operates in 8 phases:
 
 1. **Ingestion** — Raw manifests from FMS/EDI streams
-2. **Detection** — PII rule engine classifies fields by jurisdiction
+2. **Detection** — PII rule engine + ML NER classifies fields by jurisdiction
 3. **Tokenisation** — HMAC-SHA256 vault replaces PII with deterministic tokens
 4. **Audit** — 11 SQL queries detect encryption, customs, and EDI violations
-5. **Remediation** — Decision matrix auto-generates masking policies and EDI fixes
-6. **Telemetry** — Golang service tracks MTTR across all findings
+5. **State Machine Governance** — Finding lifecycle managed through 10 validated states with guard conditions and timeout SLAs
+6. **Event-Driven Reactions** — 7 autonomous rules react to findings (CRITICAL alerts, PII auto-scan, cert checks, timeout escalation)
+7. **Remediation** — Decision matrix auto-generates masking policies and EDI fixes
+8. **Telemetry** — Golang service tracks MTTR across all findings
+
+### Finding State Machine
+
+Every compliance finding follows a validated lifecycle:
+
+```
+DETECTED → TRIAGED → ASSIGNED → IN_REMEDIATION → AWAITING_VERIFICATION → VERIFIED → CLOSED
+    │          │           │              │                    │                    │
+    │          └── FALSE_POSITIVE     │              │                    └── IN_REMEDIATION (regression)
+    │                              └── ESCALATED ←───┘                    │
+    │                                  │                                    │
+    └────────────────────────── RISK_ACCEPTED ────────────────────── CLOSED
+```
+
+**Key features:**
+- **Guard conditions**: CRITICAL findings cannot transition to RISK_ACCEPTED without sign-off
+- **Timeout rules**: CRITICAL = 1hr per state, HIGH = 4hr, MEDIUM = 24hr (configurable per state)
+- **Auto-escalation**: Timeout breaches automatically transition to ESCALATED via timer actor
+- **Audit trail**: Every transition recorded in `finding_transitions` table with trigger, actor, context
+- **Legacy bridge**: Maps old 5-state `AuditStatus` to new 10-state `FindingState` for backward compatibility
+
+### Event-Driven Reactions
+
+The swarm reacts autonomously to compliance events through 7 built-in rules:
+
+| Rule | Event | Action |
+|------|-------|--------|
+| Critical Notification | `finding.created` (CRITICAL) | Emit high-priority alert for immediate assignment |
+| PII Auto-Scan | `finding.created` (PII_EXPOSURE) | Queue related manifests for anonymisation scan |
+| Cert Renewal Check | `finding.created` (CERT_EXPIRY) | Schedule 24hr cert renewal check |
+| Timeout Escalation | `finding.timeout_breach` | Auto-escalate via state machine |
+| Verification Reminder | `finding.state_changed` → awaiting_verification | Emit reminder with timeout window |
+| Audit Summary | `audit.completed` | Log severity breakdown |
+| MTTR Baseline | `finding.created` (CRITICAL/HIGH) | Create MTTR tracking baseline |
+
+Events use PostgreSQL LISTEN/NOTIFY in production (real-time push) and in-process queue in development.
 
 ---
 

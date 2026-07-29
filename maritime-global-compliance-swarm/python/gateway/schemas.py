@@ -480,5 +480,152 @@ class ConnectivityResponse(BaseModel):
     ner_layers: list[str]
     mttr_proxy: ComponentStatus
     query_registry: ComponentStatus
+    state_machine: ComponentStatus
+    event_bus: ComponentStatus
+    reaction_engine: ComponentStatus
     active_routes: int
     total_routes: int
+
+
+# ── State Machine schemas ─────────────────────────────────────────────────
+
+class FindingStateSchema(str, Enum):
+    """Unified finding lifecycle states."""
+    DETECTED = "detected"
+    TRIAGED = "triaged"
+    ASSIGNED = "assigned"
+    IN_REMEDIATION = "in_remediation"
+    AWAITING_VERIFICATION = "awaiting_verification"
+    ESCALATED = "escalated"
+    RISK_ACCEPTED = "risk_accepted"
+    VERIFIED = "verified"
+    CLOSED = "closed"
+    FALSE_POSITIVE = "false_positive"
+
+
+class TransitionRequest(BaseModel):
+    """Request to transition a finding to a new state."""
+    target_state: FindingStateSchema
+    trigger: str = Field(..., description="What caused this transition")
+    actor: str = Field("system", description="Who initiated: system, user:name, timer")
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class TransitionResponse(BaseModel):
+    """Result of a state machine transition."""
+    success: bool
+    finding_id: str
+    from_state: str
+    to_state: str
+    trigger: str
+    actor: str
+    transition_id: str
+    error: Optional[str] = None
+    guard_failed: bool = False
+    auto_escalated: bool = False
+    timeout_hours: Optional[float] = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class TransitionInfo(BaseModel):
+    """A single transition in a finding's timeline."""
+    id: str
+    from_state: str
+    to_state: str
+    trigger: str
+    actor: str
+    guard_failed: bool
+    auto_escalated: bool
+    timeout_hours: Optional[float]
+    context_payload: dict[str, Any]
+    transitioned_at: str
+
+
+class FindingTimelineResponse(BaseModel):
+    """Full state timeline for a finding."""
+    finding_id: str
+    current_state: str
+    total_transitions: int
+    transitions: list[TransitionInfo]
+
+
+class StateMachineDefinition(BaseModel):
+    """Complete state machine definition for the frontend."""
+    states: list[dict[str, Any]]
+    total_states: int
+    total_transitions: int
+    triggers: list[str]
+    actors: list[str]
+    timeout_rules: dict[str, dict[str, float]]
+
+
+class ValidTransitionsResponse(BaseModel):
+    """Available transitions from a given state."""
+    current_state: str
+    transitions: list[dict[str, Any]]
+
+
+class TimeoutCheckResponse(BaseModel):
+    """Result of timeout breach check."""
+    findings_checked: int
+    auto_escalated: int
+    escalations: list[TransitionResponse]
+
+
+# ── Event Bus schemas ─────────────────────────────────────────────────────
+
+class EventSchema(BaseModel):
+    """A single event from the event bus."""
+    event_id: str
+    event_type: str
+    source: str
+    payload: dict[str, Any]
+    timestamp: str
+    correlation_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventBusStatsResponse(BaseModel):
+    """Event bus statistics."""
+    total_events: int
+    by_type: dict[str, int]
+    event_types_available: list[str]
+    queue_depth: int
+    events_published: int
+    events_processed: int
+    errors: int
+    subscriber_count: int
+    running: bool
+    transport: str
+
+
+class ReactionRuleInfo(BaseModel):
+    """A single reaction rule."""
+    rule_id: str
+    name: str
+    description: str
+    event_types: list[str]
+    priority: int
+    enabled: bool
+    is_builtin: bool
+    action_count: int
+    last_triggered: Optional[str] = None
+
+
+class ReactionEngineStatsResponse(BaseModel):
+    """Reaction engine statistics."""
+    total_rules: int
+    enabled_rules: int
+    builtin_rules: int
+    total_actions_executed: int
+    recent_reaction_count: int
+
+
+class PublishEventRequest(BaseModel):
+    """Request to manually publish an event."""
+    event_type: str = Field(..., min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    source: str = Field("manual", description="Source of the event")
+    correlation_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

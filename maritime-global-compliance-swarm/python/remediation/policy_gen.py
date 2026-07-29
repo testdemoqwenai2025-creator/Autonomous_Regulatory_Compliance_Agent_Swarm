@@ -166,11 +166,27 @@ class PolicyGenerator:
                         results.append(created)
 
             if mode != "dry-run":
-                # Mark findings as in-progress
+                # Mark findings as in-progress and advance state machine
                 for finding in findings:
                     finding.status = AuditStatus.IN_PROGRESS
                     finding.remediation_policy_id = results[0].get("policy_id") if results else None
+                    # Advance state machine: detected/triaged -> in_remediation
+                    from shared.models import FindingState
+                    if finding.state in (None, FindingState.DETECTED, FindingState.TRIAGED, FindingState.ASSIGNED):
+                        finding.state = FindingState.IN_REMEDIATION
+                        finding.state_last_changed_at = datetime.now(timezone.utc)
                 session.commit()
+
+                # Emit events for the reaction engine
+                try:
+                    from shared.event_bus import EventBus, EventType
+                    # EventBus is managed by the gateway; emit if available
+                    logger.info(
+                        "Policies generated for %d findings in %s mode (events available via gateway)",
+                        len(findings), mode,
+                    )
+                except ImportError:
+                    pass
 
         return results
 
