@@ -4,23 +4,22 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.venv/
 *.egg
+.eggs/
+*.so
 
-# Go
-bin/
-golang/mttr-tracker
-vendor/
+# Virtual environments
+.venv/
+venv/
+env/
 
-# Data
-/data/
+# Database
 *.db
-*.sqlite
-*.sqlite3
+data/
 
 # Environment
+dotenv/
 .env
-.env.local
 
 # IDE
 .idea/
@@ -32,12 +31,15 @@ vendor/
 .DS_Store
 Thumbs.db
 
+# Build artefacts
+bin/
+*.exe
+
 # Docker
 pgdata/
 
 # Policies output
 policies/
 
-# Temp
-scripts/_*.html
-tmp/
+# Logs
+*.log
