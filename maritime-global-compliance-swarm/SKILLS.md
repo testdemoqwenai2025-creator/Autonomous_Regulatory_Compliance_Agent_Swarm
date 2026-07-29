@@ -2,7 +2,7 @@
 
 ## Overview
 
-Autonomous regulatory compliance agent swarm for global maritime freight operations. The swarm automates GDPR/PII anonymisation, EDI compliance auditing, remediation policy generation, and MTTR telemetry tracking across five international jurisdictions.
+Autonomous regulatory compliance agent swarm for global maritime freight operations. The swarm automates GDPR/PII anonymisation, EDI compliance auditing, remediation policy generation, and MTTR telemetry tracking across five international jurisdictions. Designed to evolve with emerging regulations, expanding data repositories, and the unique challenges of extreme weather and special maritime regions.
 
 ## When to Use This Skill
 
@@ -12,8 +12,12 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 - Generating automated remediation policies from audit findings
 - Tracking Mean Time To Remediate (MTTR) for compliance incidents
 - Multi-jurisdiction data governance (GDPR, CCPA, LGPD, PDPA, PIPA)
+- Weather-aware compliance operations in extreme maritime environments
+- Integrating compliance across diverse maritime data repositories (AIS, PCS, IoT, blockchain eBL)
 
-## Capabilities
+---
+
+## Current Capabilities
 
 ### 1. Manifest PII Anonymiser (Python)
 
@@ -61,6 +65,105 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 - **CORS middleware** — configured for cross-origin frontend access
 - **MTTR proxy** — transparently proxies MTTR requests to the Golang service
 
+---
+
+## Next-Level Evolution Path
+
+### PII Anonymiser Evolution
+
+| Evolution | Description | Target Capability |
+|-----------|-------------|-------------------|
+| **ML-based NER** | Integrate spaCy with custom maritime named-entity recognition for free-text fields | Catch PII in remarks, special instructions, hazmat descriptions that regex misses |
+| **Multi-script Unicode** | Unicode property classes for CJK, Arabic, Devanagari, Cyrillic name/email/ID formats | Support China Resident ID (18-digit), Aadhaar (12-digit), CPF (11-digit) |
+| **Format-agnostic parsing** | JSON-LD, CBOR, protobuf, Avro manifest payload support | Handle blockchain eBL, digital twin, IoT sensor data |
+| **Context-aware risk scoring** | Grade PII by re-identification difficulty; proportionate masking | Reduce over-masking, preserve data utility for analytics |
+| **Key versioning** | HMAC key rotation without breaking existing token mappings | Zero-downtime cryptographic key rotation |
+| **Chinese/Indian/Brazilian ID formats** | Locale-specific regex for national identity documents | Full coverage across BRICS+ shipping corridors |
+
+### EDI Auditor Evolution
+
+| Evolution | Description | Target Capability |
+|-----------|-------------|-------------------|
+| **Pluggable query registry** | Database-backed queries updatable via API without redeployment | Real-time regulatory update response |
+| **AIS data compliance** | Audit AIS positional data integrity, spoofing detection, reporting gaps | Cover the fastest-growing maritime data source |
+| **EU ETS domain** | 6th compliance domain for carbon reporting (MRV, registry, credits) | Address 2024+ EU ETS maritime mandate |
+| **Cross-DB federation** | Query across FMS + PCS + customs single-window + AIS warehouse | Unified compliance audit across all data repositories |
+| **Statistical anomaly detection** | Baseline distributions, flag outliers before they become violations | Proactive vs. reactive compliance |
+| **Weather-correlated tagging** | Correlate findings with severe weather to adjust severity | Reduce false-positive critical findings by 20-30% |
+
+### Remediation Generator Evolution
+
+| Evolution | Description | Target Capability |
+|-----------|-------------|-------------------|
+| **Closed-loop verification** | Auto re-audit after remediation, escalate if still failing | Ensure root-cause resolution |
+| **Region-aware policies** | PostGIS geo-fencing; Arctic vs. standard lane rules | Compliant operations in special regions |
+| **Weather-hold mode** | Grace-period policies during hurricanes, typhoons, polar storms | Prevent inappropriate enforcement during force majeure |
+| **Learned decision matrix** | Train on historical finding-remediation-verification outcomes | Continuously improving remediation accuracy |
+| **Multi-party orchestration** | Workflow engine for cross-organisational compliance issues | Handle carrier + customs + port authority coordination |
+
+### MTTR Tracker Evolution
+
+| Evolution | Description | Target Capability |
+|-----------|-------------|-------------------|
+| **Time-series analytics** | Rolling averages, EMA, seasonal decomposition of MTTR | Trend identification and performance tracking |
+| **Weather-adjusted MTTR** | Exclude force majeure periods from MTTR calculation | Fair compliance performance measurement |
+| **Regional breakdown** | MTTR by trade lane, port pair, geographic region | Identify regional compliance bottlenecks |
+| **Burst detection** | Cluster correlated findings into incidents | Prevent MTTR distortion from systemic failures |
+| **Predictive estimation** | Regression-based MTTR prediction for new findings | Proactive resource allocation |
+| **SSE streaming** | Real-time MTTR feed via Server-Sent Events | Live compliance dashboards without polling |
+
+---
+
+## Weather and Special Regions Intelligence
+
+### Supported Region Profiles
+
+| Region | Weather Risks | Compliance Adjustments |
+|--------|--------------|----------------------|
+| **Arctic (Northern Sea Route)** | Sea ice, polar lows, -40C, satellite-only comms | Extended SLAs, ice-route customs pre-clearance, satellite-optimised EDI retry |
+| **Gulf of Aden / Red Sea** | Extreme heat 50C+, piracy, Houthi disruptions | Sanction screening on route changes, automatic grace-period, security escalation |
+| **Bay of Bengal** | Cyclone season Apr-Dec, monsoon flooding, port closures | Weather-hold mode, bulk VGM re-submission, port-closure event correlation |
+| **Caribbean / Gulf of Mexico** | Hurricane season Jun-Nov, storm surge, port evacuations | Burst-mode MTTR clustering, insurance doc auto-gen, regional weather-adjusted SLAs |
+| **Strait of Malacca** | Tropical thunderstorms, high traffic, AIS congestion | Deduplication audit, AIS gap detection, high-throughput message queue |
+| **English Channel / North Sea** | Fog, rough seas, wind farm AIS interference | Container-loss incident templates, hazmat exposure audit, weather-correlated MTTR |
+
+### Weather Integration Architecture
+
+The swarm is designed to ingest marine weather data and use it as a first-class compliance signal:
+
+1. **Weather Ingestion Service** — Polls NOAA GFS, ECMWF ERA5, and commercial APIs every 15 minutes
+2. **Marine Zone Forecast Storage** — Weather data stored in PostgreSQL with PostGIS spatial indexing
+3. **Compliance Event Bus** — Weather events (PORT_CLOSURE, STORM_TRACK, CANAL_BLOCKAGE) join with compliance events via Redis Streams
+4. **Downstream Consumers** — Auditor tags findings with weather context, Remediation enters weather-hold mode, MTTR excludes force majeure periods
+
+### Weather-Aware Compliance Patterns
+
+| Pattern | Trigger | System Response |
+|---------|---------|-----------------|
+| **Weather hold** | Active storm within 200nm of affected port | Pause remediation SLA clocks, generate grace-period policies |
+| **Weather-adjusted MTTR** | Finding created during active weather event | Exclude weather duration from MTTR calculation |
+| **Bulk re-filing** | Port reopens after closure | Auto-generate customs re-filing tasks for affected shipments |
+| **Route deviation audit** | Vessel deviates from declared route | Cross-reference with weather/piracy/sanction events to classify deviation type |
+| **Environmental compliance** | Temperature excursion in cold-chain container | Generate hazmat compliance finding, notify food/pharma regulatory contacts |
+
+---
+
+## Data Repository Integration Map
+
+| Data Source | Protocol | Compliance Value |
+|-------------|----------|-----------------|
+| **Freight Management System** | Direct DB (SQLAlchemy) | Core compliance data, EDI records, manifests |
+| **Port Community Systems** | REST API + webhooks | Customs pre-clearance, port fee compliance |
+| **Single-Window Customs** | UN/EDIFACT CUSCAR/CUSRES | Real-time customs filing verification |
+| **AIS Feeds** | Kafka/UDP stream | Vessel tracking compliance, positional integrity |
+| **Blockchain eBL** | Smart contract events | Bill of Lading integrity, chain-of-custody |
+| **IoT Container Sensors** | MQTT broker | Cold-chain temperature, shock detection compliance |
+| **Terminal OS (TOS)** | EDIFACT COPARN/COARRI | Container movement, storage deadline compliance |
+| **Emissions Monitoring** | MRV data API | EU ETS, IMO DCS carbon reporting |
+| **Crew Management** | REST API + SSO | Crew privacy, MLC 2006 compliance |
+
+---
+
 ## Jurisdictions Supported
 
 | Jurisdiction | Regulation | Key Requirements |
@@ -70,6 +173,8 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 | **LGPD** | Brazil Lei Geral de Protecao de Dados | Consent-based processing, DPO requirements |
 | **PDPA** | Singapore Personal Data Protection Act | Purpose limitation, consent obligations |
 | **PIPA** | South Korea Personal Information Protection Act | Consent and data minimisation |
+
+---
 
 ## Supported EDI Standards
 
@@ -81,6 +186,8 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 - **IFTMBC** (Booking confirmation)
 - **CUSTOMS** (Customs declarations)
 
+---
+
 ## Database Schema
 
 6 SQLAlchemy ORM tables:
@@ -91,6 +198,17 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 4. `edi_connection_profiles` — partner EDI connection configurations
 5. `mttr_events` — telemetry events tracking finding lifecycle phases
 6. `compliance_reports` — periodic compliance summary reports
+
+7 Enum types:
+
+- `PIIFieldCategory` — consignee_identity, shipper_identity, contact_info, financial_id, government_id, location
+- `AuditSeverity` — critical, high, medium, low, info
+- `AuditStatus` — open, in_progress, remediated, accepted_risk, false_positive
+- `EDIStandard` — EDIFACT, ANSI_X12, BAPLIE, VGM, COPARN, IFTMBC, CUSTOMS
+- `PolicyAction` — tokenise, redact, generalise, pseudonymise, encrypt, truncate
+- `RiskCategory` — pii_exposure, unencrypted_transmission, missing_customs_doc, edi_non_compliance, data_retention_violation, access_control_breach, cert_expiry
+
+---
 
 ## API Endpoints
 
@@ -116,6 +234,8 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 | GET | `/docs` | Swagger UI |
 | GET | `/redoc` | ReDoc |
 
+---
+
 ## Technology Stack
 
 | Component | Technology | Version |
@@ -129,6 +249,8 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 | Database (prod) | PostgreSQL 16 + PostGIS 3.4 | — |
 | Containerisation | Docker multi-stage, docker-compose | — |
 | CI/CD | GitHub Actions (5 jobs) | — |
+
+---
 
 ## Deployment
 
@@ -144,6 +266,8 @@ docker compose --profile tools run --rm auditor
 docker compose --profile tools run --rm anonymiser
 ```
 
+---
+
 ## Security Considerations
 
 - **HMAC key** — drives all tokenisation determinism; rotating it invalidates every token. Treat as a root CA key.
@@ -151,3 +275,4 @@ docker compose --profile tools run --rm anonymiser
 - **Gateway auth** — add API key or JWT middleware before production exposure (especially `apply` mode endpoints).
 - **CORS** — currently wildcard; lock to your frontend domain in production.
 - **Rate limiting** — not yet implemented; bulk manifest uploads could spike DB writes.
+- **Audit logging** — API request audit trail should be added for ISO 27001 and GDPR accountability.
