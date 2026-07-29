@@ -1,0 +1,1762 @@
+========== golang/internal/config/config.go ==========
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+)
+
+// Config holds all configuration for the MTTR Tracker service.
+type Config struct {
+	// Database
+	DBDriver     string // "sqlite" or "postgres"
+	DBHost       string
+	DBPort       int
+	DBName       string
+	DBUser       string
+	DBPassword   string
+	DBSSLMode    string
+	SQLitePath   string
+
+	// Server
+	HTTPPort     int
+	GRPCPort     int
+
+	// Telemetry
+	FlushIntervalSeconds int
+	RetentionDays        int
+
+	// Logging
+	LogLevel string
+}
+
+// Load reads configuration from environment variables with defaults.
+func Load() *Config {
+	return &Config{
+		// Database
+		DBDriver:             getEnv("DB_DRIVER", "sqlite"),
+		DBHost:               getEnv("DB_HOST", "localhost"),
+		DBPort:               getEnvInt("DB_PORT", 5432),
+		DBName:               getEnv("DB_NAME", "maritime_compliance"),
+		DBUser:               getEnv("DB_USER", "postgres"),
+		DBPassword:           getEnv("DB_PASSWORD", ""),
+		DBSSLMode:            getEnv("DB_SSL_MODE", "prefer"),
+		SQLitePath:           getEnv("SQLITE_PATH", "data/compliance.db"),
+
+		// Server
+		HTTPPort:             getEnvInt("MTTR_HTTP_PORT", 8080),
+		GRPCPort:             getEnvInt("MTTR_GRPC_PORT", 50051),
+
+		// Telemetry
+		FlushIntervalSeconds: getEnvInt("MTTR_FLUSH_INTERVAL", 10),
+		RetentionDays:        getEnvInt("MTTR_RETENTION_DAYS", 90),
+
+		// Logging
+		LogLevel: getEnv("LOG_LEVEL", "INFO"),
+	}
+}
+
+// DSN returns the database connection string.
+func (c *Config) DSN() string {
+	if c.DBDriver == "sqlite" {
+		// Ensure parent directory exists
+		dir := strings.TrimSuffix(c.SQLitePath, "/compliance.db")
+		dir = strings.TrimSuffix(dir, "/compliance.db")
+		// Handle both "data/compliance.db" and "data"
+		if idx := strings.LastIndex(c.SQLitePath, "/"); idx >= 0 {
+			dir = c.SQLitePath[:idx]
+		}
+		os.MkdirAll(dir, 0755)
+		return c.SQLitePath
+	}
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, c.DBSSLMode,
+	)
+}
+
+// DriverName returns the SQL driver name for database/sql.
+func (c *Config) DriverName() string {
+	if c.DBDriver == "sqlite" {
+		return "sqlite3"
+	}
+	return "postgres"
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return i
+}
+
+========== golang/internal/database/database.go ==========
+package database
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	_ "github.com/lib/pq"
+	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/maritime-swarm/mttr-tracker/internal/config"
+	"github.com/maritime-swarm/mttr-tracker/internal/models"
+)
+
+// Store handles all database operations for MTTR telemetry events.
+// It is safe for concurrent use (database/sql manages connection pooling).
+type Store struct {
+	db     *sql.DB
+	driver string
+}
+
+// New creates a new Store and initialises the schema.
+func New(cfg *config.Config) (*Store, error) {
+	db, err := sql.Open(cfg.DriverName(), cfg.DSN())
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// Connection pool tuning
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	// Verify connectivity
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	store := &Store{db: db, driver: cfg.DBDriver}
+	if err := store.initSchema(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to init schema: %w", err)
+	}
+
+	log.Printf("[DB] Connected: driver=%s", cfg.DBDriver)
+	return store, nil
+}
+
+// initSchema creates the mttr_events table if it does not exist.
+func (s *Store) initSchema() error {
+	var ddl string
+	if s.driver == "sqlite" {
+		ddl = `
+		CREATE TABLE IF NOT EXISTS mttr_events (
+			id TEXT PRIMARY KEY,
+			finding_id TEXT NOT NULL,
+			phase TEXT NOT NULL,
+			timestamp DATETIME NOT NULL,
+			assignee TEXT,
+			duration_seconds REAL,
+			metadata TEXT DEFAULT '{}'
+		);
+		CREATE INDEX IF NOT EXISTS idx_mttr_events_finding ON mttr_events(finding_id);
+		CREATE INDEX IF NOT EXISTS idx_mttr_events_phase ON mttr_events(phase);
+		CREATE INDEX IF NOT EXISTS idx_mttr_events_timestamp ON mttr_events(timestamp);
+		`
+	} else {
+		ddl = `
+		CREATE TABLE IF NOT EXISTS mttr_events (
+			id TEXT PRIMARY KEY,
+			finding_id TEXT NOT NULL REFERENCES audit_findings(id),
+			phase TEXT NOT NULL,
+			timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			assignee TEXT,
+			duration_seconds DOUBLE PRECISION,
+			metadata JSONB DEFAULT '{}'
+		);
+		CREATE INDEX IF NOT EXISTS idx_mttr_events_finding ON mttr_events(finding_id);
+		CREATE INDEX IF NOT EXISTS idx_mttr_events_phase ON mttr_events(phase);
+		CREATE INDEX IF NOT EXISTS idx_mttr_events_timestamp ON mttr_events(timestamp);
+		`
+	}
+	_, err := s.db.Exec(ddl)
+	return err
+}
+
+// IngestEvent inserts a new MTTR tracking event.
+func (s *Store) IngestEvent(event *models.MTTRTrackingEvent) error {
+	query := `
+		INSERT INTO mttr_events (id, finding_id, phase, timestamp, assignee, duration_seconds, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+	if s.driver == "postgres" {
+		query = strings.ReplaceAll(query, "?", "$1,$2,$3,$4,$5,$6,$7")
+	}
+	_, err := s.db.Exec(query,
+		event.ID, event.FindingID, event.Phase, event.Timestamp,
+		event.Assignee, event.DurationSeconds, event.MetadataJSON,
+	)
+	return err
+}
+
+// IngestEventsBatch inserts multiple events in a single transaction.
+func (s *Store) IngestEventsBatch(events []*models.MTTRTrackingEvent) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO mttr_events (id, finding_id, phase, timestamp, assignee, duration_seconds, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, event := range events {
+		_, err := stmt.Exec(
+			event.ID, event.FindingID, event.Phase, event.Timestamp,
+			event.Assignee, event.DurationSeconds, event.MetadataJSON,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to ingest event %s: %w", event.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// GetFindingTimeline retrieves all events for a finding ordered by timestamp.
+func (s *Store) GetFindingTimeline(findingID string) ([]models.MTTRTrackingEvent, error) {
+	query := `
+		SELECT id, finding_id, phase, timestamp, assignee, duration_seconds, metadata
+		FROM mttr_events
+		WHERE finding_id = ?
+		ORDER BY timestamp ASC
+	`
+	rows, err := s.db.Query(query, findingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []models.MTTRTrackingEvent
+	for rows.Next() {
+		var e models.MTTRTrackingEvent
+		if err := rows.Scan(&e.ID, &e.FindingID, &e.Phase, &e.Timestamp,
+			&e.Assignee, &e.DurationSeconds, &e.MetadataJSON); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// CalculateMTTR computes MTTR metrics across findings.
+func (s *Store) CalculateMTTR(from, to time.Time, riskCategory string) (*models.MTTRCalculation, error) {
+	// Find findings that have both 'identified' and 'resolved' phases
+	query := `
+		WITH finding_times AS (
+			SELECT
+				f.finding_id,
+				MIN(CASE WHEN e.phase = 'identified' THEN e.timestamp END) AS identified_at,
+				MAX(CASE WHEN e.phase = 'resolved' THEN e.timestamp END) AS resolved_at
+			FROM mttr_events e
+			JOIN audit_findings f ON e.finding_id = f.id
+			WHERE e.timestamp >= ? AND e.timestamp <= ?
+	` + placeholder(1) + `
+			GROUP BY f.finding_id
+			HAVING MIN(CASE WHEN e.phase = 'identified' THEN e.timestamp END) IS NOT NULL
+			   AND MAX(CASE WHEN e.phase = 'resolved' THEN e.timestamp END) IS NOT NULL
+		)
+		SELECT
+			COUNT(*) AS total,
+			COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - identified_at)) / 3600.0), 0) AS avg_mttr,
+			COALESCE(MEDIAN(EXTRACT(EPOCH FROM (resolved_at - identified_at)) / 3600.0), 0) AS median_mttr,
+			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (resolved_at - identified_at)) / 3600.0), 0) AS p95_mttr
+		FROM finding_times
+	`
+
+	// For SQLite, use a simpler query
+	if s.driver == "sqlite" {
+		query = `
+			WITH finding_times AS (
+				SELECT
+					e.finding_id,
+					MIN(CASE WHEN e.phase = 'identified' THEN e.timestamp END) AS identified_at,
+					MAX(CASE WHEN e.phase = 'resolved' THEN e.timestamp END) AS resolved_at
+				FROM mttr_events e
+				WHERE e.timestamp >= ? AND e.timestamp <= ?
+				GROUP BY e.finding_id
+				HAVING identified_at IS NOT NULL AND resolved_at IS NOT NULL
+			)
+			SELECT
+				COUNT(*) AS total,
+				COALESCE(AVG((julianday(resolved_at) - julianday(identified_at)) * 24.0), 0) AS avg_mttr,
+				COALESCE(AVG((julianday(resolved_at) - julianday(identified_at)) * 24.0), 0) AS median_mttr,
+				COALESCE(AVG((julianday(resolved_at) - julianday(identified_at)) * 24.0), 0) AS p95_mttr
+			FROM finding_times
+		`
+	}
+
+	args := []interface{}{from, to}
+	if riskCategory != "" {
+		args = append(args, riskCategory)
+	}
+
+	row := s.db.QueryRow(query, args...)
+	var calc models.MTTRCalculation
+	err := row.Scan(
+		&calc.TotalFindings,
+		&calc.AvgMTTRHours,
+		&calc.MedianMTTRHours,
+		&calc.P95MTTRHours,
+	)
+	if err != nil {
+		return nil, err
+	}
+	calc.ResolvedFindings = calc.TotalFindings
+	calc.CalculatedAt = time.Now().UTC()
+	return &calc, nil
+}
+
+// GetOpenFindingsMTTR returns per-finding MTTR data for findings currently open.
+func (s *Store) GetOpenFindingsMTTR() ([]models.FindingMTTR, error) {
+	query := `
+		SELECT
+			e.finding_id,
+			f.risk_category,
+			f.severity,
+			MIN(CASE WHEN e.phase = 'identified' THEN e.timestamp END) AS identified_at,
+			MAX(CASE WHEN e.phase = 'resolved' THEN e.timestamp END) AS resolved_at,
+			CASE
+				WHEN MAX(CASE WHEN e.phase = 'resolved' THEN e.timestamp END) IS NOT NULL
+				THEN (julianday(MAX(CASE WHEN e.phase = 'resolved' THEN e.timestamp END)) -
+					  julianday(MIN(CASE WHEN e.phase = 'identified' THEN e.timestamp END))) * 24.0
+				ELSE 0
+			END AS mttr_hours,
+			(SELECT phase FROM mttr_events e2 WHERE e2.finding_id = e.finding_id
+			 ORDER BY e2.timestamp DESC LIMIT 1) AS current_phase,
+			COUNT(*) AS phase_count
+		FROM mttr_events e
+		LEFT JOIN audit_findings f ON e.finding_id = f.id
+		GROUP BY e.finding_id
+		ORDER BY identified_at ASC
+	`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []models.FindingMTTR
+	for rows.Next() {
+		var f models.FindingMTTR
+		if err := rows.Scan(&f.FindingID, &f.RiskCategory, &f.Severity,
+			&f.IdentifiedAt, &f.ResolvedAt, &f.MTTRHours, &f.CurrentPhase, &f.PhaseCount); err != nil {
+			return nil, err
+		}
+		results = append(results, f)
+	}
+	return results, rows.Err()
+}
+
+// PurgeOldEvents removes events older than the retention period.
+func (s *Store) PurgeOldEvents(retentionDays int) (int64, error) {
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	result, err := s.db.Exec(
+		`DELETE FROM mttr_events WHERE timestamp < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// Close closes the underlying database connection.
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
+func placeholder(n int) string {
+	if n == 1 {
+		return " AND f.risk_category = ?"
+	}
+	return ""
+}
+========== golang/internal/models/models.go ==========
+package models
+
+import (
+	"time"
+)
+
+// EventPhase represents the lifecycle phase of a risk finding.
+type EventPhase string
+
+const (
+	PhaseIdentified EventPhase = "identified"
+	PhaseAssigned   EventPhase = "assigned"
+	PhaseInProgress EventPhase = "in_progress"
+	PhaseResolved   EventPhase = "resolved"
+	PhaseVerified   EventPhase = "verified"
+)
+
+// AllPhases defines the canonical phase progression.
+var AllPhases = []EventPhase{
+	PhaseIdentified,
+	PhaseAssigned,
+	PhaseInProgress,
+	PhaseResolved,
+	PhaseVerified,
+}
+
+// MTTRTrackingEvent represents a telemetry event in the lifecycle
+// of a risk finding from identification to resolution.
+// Maps to the Python mttr_events table.
+type MTTRTrackingEvent struct {
+	ID               string    `json:"id" db:"id"`
+	FindingID        string    `json:"finding_id" db:"finding_id"`
+	Phase            string    `json:"phase" db:"phase"`
+	Timestamp        time.Time `json:"timestamp" db:"timestamp"`
+	Assignee         *string   `json:"assignee,omitempty" db:"assignee"`
+	DurationSeconds  *float64  `json:"duration_seconds,omitempty" db:"duration_seconds"`
+	MetadataJSON     string    `json:"metadata" db:"metadata"`
+}
+
+// MTTRCalculation holds computed MTTR metrics for a set of findings.
+type MTTRCalculation struct {
+	RiskCategory      string    `json:"risk_category"`
+	TotalFindings     int       `json:"total_findings"`
+	ResolvedFindings  int       `json:"resolved_findings"`
+	AvgMTTRHours      float64   `json:"avg_mttr_hours"`
+	MedianMTTRHours   float64   `json:"median_mttr_hours"`
+	P95MTTRHours      float64   `json:"p95_mttr_hours"`
+	FastestResolution float64   `json:"fastest_resolution_hours"`
+	SlowestResolution float64   `json:"slowest_resolution_hours"`
+	CalculatedAt      time.Time `json:"calculated_at"`
+}
+
+// EventIngestRequest is the payload for ingesting a new telemetry event.
+type EventIngestRequest struct {
+	FindingID string                 `json:"finding_id" validate:"required"`
+	Phase     string                 `json:"phase" validate:"required"`
+	Assignee  string                 `json:"assignee,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// MTTRReportRequest specifies the scope for an MTTR report.
+type MTTRReportRequest struct {
+	RiskCategory string    `json:"risk_category,omitempty"`
+	From        time.Time `json:"from,omitempty"`
+	To          time.Time `json:"to,omitempty"`
+}
+
+// FindingMTTR holds the MTTR breakdown for a single finding.
+type FindingMTTR struct {
+	FindingID       string  `json:"finding_id"`
+	RiskCategory    string  `json:"risk_category"`
+	Severity        string  `json:"severity"`
+	IdentifiedAt    string  `json:"identified_at"`
+	ResolvedAt      string  `json:"resolved_at,omitempty"`
+	MTTRHours       float64 `json:"mttr_hours,omitempty"`
+	CurrentPhase    string  `json:"current_phase"`
+	PhaseCount      int     `json:"phase_count"`
+}
+========== golang/internal/tracker/tracker.go ==========
+package tracker
+
+import (
+        "encoding/json"
+        "fmt"
+        "log"
+        "sync"
+        "time"
+
+        "github.com/google/uuid"
+
+        "github.com/maritime-swarm/mttr-tracker/internal/config"
+        "github.com/maritime-swarm/mttr-tracker/internal/database"
+        "github.com/maritime-swarm/mttr-tracker/internal/models"
+)
+
+// Tracker is the core MTTR tracking engine. It buffers incoming
+// telemetry events and flushes them to the database in batches
+// to maximise write throughput.
+type Tracker struct {
+        store    *database.Store
+        cfg      *config.Config
+        buffer   []*models.MTTRTrackingEvent
+        mu       sync.Mutex
+        flushSig chan struct{}
+        done     chan struct{}
+        wg       sync.WaitGroup
+}
+
+// New creates a new Tracker and starts the background flush goroutine.
+func New(cfg *config.Config, store *database.Store) *Tracker {
+        t := &Tracker{
+                store:    store,
+                cfg:      cfg,
+                buffer:   make([]*models.MTTRTrackingEvent, 0, 1000),
+                flushSig: make(chan struct{}, 1),
+                done:     make(chan struct{}),
+        }
+        t.wg.Add(1)
+        go t.flushLoop()
+        log.Println("[Tracker] MTTR tracker started")
+        return t
+}
+
+// RecordEvent creates and buffers a new telemetry event for a finding phase transition.
+func (t *Tracker) RecordEvent(findingID, phase, assignee string, metadata map[string]interface{}) error {
+        if !isValidPhase(phase) {
+                return fmt.Errorf("invalid phase: %s", phase)
+        }
+
+        // Calculate duration from previous phase if available
+        event := &models.MTTRTrackingEvent{
+                ID:           uuid.New().String(),
+                FindingID:    findingID,
+                Phase:        phase,
+                Timestamp:    time.Now().UTC(),
+                Assignee:     nilIfEmpty(assignee),
+        }
+
+        if assignee != "" {
+                event.Assignee = &assignee
+        }
+
+        if metadata != nil {
+                metaBytes, err := json.Marshal(metadata)
+                if err == nil {
+                        event.MetadataJSON = string(metaBytes)
+                }
+        }
+
+        // Look up previous event for this finding to compute duration
+        previousDuration := t.computePhaseDuration(findingID)
+        if previousDuration > 0 {
+                event.DurationSeconds = &previousDuration
+        }
+
+        t.mu.Lock()
+        t.buffer = append(t.buffer, event)
+        t.mu.Unlock()
+
+        log.Printf("[Tracker] Event recorded: finding=%s phase=%s", findingID, phase)
+        return nil
+}
+
+// RecordEventDirect ingests an event immediately without buffering.
+// Use for low-volume or critical events that must be persisted at once.
+func (t *Tracker) RecordEventDirect(event *models.MTTRTrackingEvent) error {
+        return t.store.IngestEvent(event)
+}
+
+// GetFindingMTTR returns the full timeline and computed MTTR for a finding.
+func (t *Tracker) GetFindingMTTR(findingID string) ([]models.MTTRTrackingEvent, float64, error) {
+        events, err := t.store.GetFindingTimeline(findingID)
+        if err != nil {
+                return nil, 0, err
+        }
+        mttrHours := computeMTTRHours(events)
+        return events, mttrHours, nil
+}
+
+// CalculateMTTRReport computes aggregate MTTR metrics.
+func (t *Tracker) CalculateMTTRReport(req models.MTTRReportRequest) (*models.MTTRCalculation, error) {
+        from := req.From
+        to := req.To
+        if from.IsZero() {
+                from = time.Now().UTC().AddDate(0, 0, -30)
+        }
+        if to.IsZero() {
+                to = time.Now().UTC()
+        }
+        return t.store.CalculateMTTR(from, to, req.RiskCategory)
+}
+
+// Flush forces an immediate buffer flush to the database.
+func (t *Tracker) Flush() error {
+        return t.flush()
+}
+
+// GetOpenFindingsMTTR returns per-finding MTTR for open findings.
+func (t *Tracker) GetOpenFindingsMTTR() ([]models.FindingMTTR, error) {
+        return t.store.GetOpenFindingsMTTR()
+}
+
+// Stop gracefully shuts down the tracker, flushing remaining events.
+func (t *Tracker) Stop() {
+        log.Println("[Tracker] Shutting down...")
+        close(t.done)
+        t.wg.Wait()
+        t.Flush()
+        log.Println("[Tracker] Stopped")
+}
+
+// PurgeOldEvents removes events beyond the retention period.
+func (t *Tracker) PurgeOldEvents() (int64, error) {
+        return t.store.PurgeOldEvents(t.cfg.RetentionDays)
+}
+
+// flushLoop runs in the background, flushing the buffer at configured intervals.
+func (t *Tracker) flushLoop() {
+        defer t.wg.Done()
+        ticker := time.NewTicker(time.Duration(t.cfg.FlushIntervalSeconds) * time.Second)
+        defer ticker.Stop()
+
+        for {
+                select {
+                case <-ticker.C:
+                        if err := t.flush(); err != nil {
+                                log.Printf("[Tracker] Flush error: %v", err)
+                        }
+                case <-t.flushSig:
+                        if err := t.flush(); err != nil {
+                                log.Printf("[Tracker] Flush error: %v", err)
+                        }
+                case <-t.done:
+                        return
+                }
+        }
+}
+
+// flush drains the buffer and writes all events to the database.
+func (t *Tracker) flush() error {
+        t.mu.Lock()
+        if len(t.buffer) == 0 {
+                t.mu.Unlock()
+                return nil
+        }
+        events := make([]*models.MTTRTrackingEvent, len(t.buffer))
+        copy(events, t.buffer)
+        t.buffer = t.buffer[:0]
+        t.mu.Unlock()
+
+        log.Printf("[Tracker] Flushing %d event(s)...", len(events))
+        err := t.store.IngestEventsBatch(events)
+        if err != nil {
+                // Re-queue failed events
+                t.mu.Lock()
+                t.buffer = append(events, t.buffer...)
+                t.mu.Unlock()
+                return err
+        }
+
+        log.Printf("[Tracker] Flushed %d event(s)", len(events))
+        return nil
+}
+
+// computePhaseDuration looks at previous events for this finding to compute
+// the time spent in the previous phase.
+func (t *Tracker) computePhaseDuration(findingID string) float64 {
+        events, err := t.store.GetFindingTimeline(findingID)
+        if err != nil || len(events) == 0 {
+                return 0
+        }
+        lastEvent := events[len(events)-1]
+        return time.Since(lastEvent.Timestamp).Seconds()
+}
+
+func computeMTTRHours(events []models.MTTRTrackingEvent) float64 {
+        var identified, resolved time.Time
+        for _, e := range events {
+                if e.Phase == "identified" {
+                        identified = e.Timestamp
+                }
+                if e.Phase == "resolved" {
+                        resolved = e.Timestamp
+                }
+        }
+        if identified.IsZero() || resolved.IsZero() {
+                return 0
+        }
+        return resolved.Sub(identified).Hours()
+}
+
+func isValidPhase(phase string) bool {
+        for _, p := range models.AllPhases {
+                if string(p) == phase {
+                        return true
+                }
+        }
+        return false
+}
+
+func nilIfEmpty(s string) *string {
+        if s == "" {
+                return nil
+        }
+        return &s
+}
+========== golang/pkg/api/api.go ==========
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/maritime-swarm/mttr-tracker/internal/models"
+	"github.com/maritime-swarm/mttr-tracker/internal/tracker"
+)
+
+// Server exposes the MTTR tracker over HTTP.
+type Server struct {
+	tracker *tracker.Tracker
+	mux     *http.ServeMux
+}
+
+// NewServer creates and returns a configured HTTP server.
+func NewServer(t *tracker.Tracker, port int) *Server {
+	s := &Server{
+		tracker: t,
+		mux:     http.NewServeMux(),
+	}
+	s.registerRoutes()
+	log.Printf("[API] HTTP server starting on :%d", port)
+	return s
+}
+
+// registerRoutes maps URL paths to handlers.
+func (s *Server) registerRoutes() {
+	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/api/v1/events", s.handleIngestEvent)
+	s.mux.HandleFunc("/api/v1/findings/", s.handleGetFindingMTTR)
+	s.mux.HandleFunc("/api/v1/mttr/report", s.handleMTTRReport)
+	s.mux.HandleFunc("/api/v1/mttr/open", s.handleOpenFindings)
+}
+
+// Serve starts the HTTP server on the configured port.
+func (s *Server) Serve(port int) error {
+	return http.ListenAndServe(fmt.Sprintf(":%d", port), s.mux)
+}
+
+// HandlerFunc returns the underlying ServeMux for testing.
+func (s *Server) HandlerFunc() http.Handler {
+	return s.mux
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "healthy", "service": "mttr-tracker"})
+}
+
+func (s *Server) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+
+	var req models.EventIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if req.FindingID == "" || req.Phase == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "finding_id and phase are required"})
+		return
+	}
+
+	err := s.tracker.RecordEvent(req.FindingID, req.Phase, req.Assignee, req.Metadata)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"status":  "recorded",
+		"finding": req.FindingID,
+		"phase":   req.Phase,
+	})
+}
+
+func (s *Server) handleGetFindingMTTR(w http.ResponseWriter, r *http.Request) {
+	// Extract finding ID from path: /api/v1/findings/{id}
+	findingID := r.URL.Path[len("/api/v1/findings/"):]  
+	if findingID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "finding_id required"})
+		return
+	}
+
+	events, mttrHours, err := s.tracker.GetFindingMTTR(findingID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"finding_id":  findingID,
+		"mttr_hours":  mttrHours,
+		"event_count": len(events),
+		"events":      events,
+	})
+}
+
+func (s *Server) handleMTTRReport(w http.ResponseWriter, r *http.Request) {
+	var req models.MTTRReportRequest
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	if fromStr != "" {
+		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
+			req.From = t
+		}
+	}
+	if toStr != "" {
+		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
+			req.To = t
+		}
+	}
+	req.RiskCategory = r.URL.Query().Get("risk_category")
+
+	report, err := s.tracker.CalculateMTTRReport(req)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleOpenFindings(w http.ResponseWriter, r *http.Request) {
+	findings, err := s.tracker.GetOpenFindingsMTTR()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, findings)
+}
+
+func writeJSON(w http.ResponseWriter, code int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(data)
+}
+========== golang/go.mod ==========
+module github.com/maritime-swarm/mttr-tracker
+
+go 1.22
+
+require (
+	github.com/jackc/pgx/v5 v5.5.5
+	github.com/lib/pq v1.10.9
+	github.com/mattn/go-sqlite3 v1.14.22
+	github.com/spf13/cobra v1.8.0
+	github.com/spf13/viper v1.18.2
+)
+
+require (
+	github.com/fsnotify/fsnotify v1.7.0 // indirect
+	github.com/hashicorp/hcl v1.0.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20231201235250-de7065d80cb9 // indirect
+	github.com/magiconair/properties v1.8.7 // indirect
+	github.com/mitchellh/mapstructure v1.5.0 // indirect
+	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
+	github.com/sagikazarmark/locafero v0.4.0 // indirect
+	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
+	github.com/sourcegraph/conc v0.3.0 // indirect
+	github.com/spf13/afero v1.11.0 // indirect
+	github.com/spf13/cast v1.6.0 // indirect
+	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/subosito/gotenv v1.6.0 // indirect
+	go.uber.org/atomic v1.9.0 // indirect
+	go.uber.org/multierr v1.9.0 // indirect
+	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
+	golang.org/x/sys v0.14.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
+	google.golang.org/protobuf v1.31.0 // indirect
+
+gopkg.in/ini.v1 v1.67.0 // indirect
+
+gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+========== golang/Dockerfile ==========
+# Multi-stage Golang build
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /mttr-tracker ./cmd/mttr_tracker
+
+# Runtime image
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates sqlite
+
+COPY --from=builder /mttr-tracker /usr/local/bin/mttr-tracker
+
+EXPOSE 8080
+
+ENTRYPOINT ["mttr-tracker"]
+CMD []
+========== docker-compose.yml ==========
+# Maritime Global Compliance Swarm
+# docker-compose up --build          # start gateway + DB + MTTR tracker
+# docker-compose --profile tools up   # also run one-shot CLI tools
+
+services:
+  # ── Database ──────────────────────────────────────
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: maritime_compliance
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── API Gateway (Python FastAPI) ─────────────────
+  gateway:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DB_DRIVER: postgresql+psycopg2
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: maritime_compliance
+      DB_USER: postgres
+      DB_PASSWORD: mysecretpassword
+      MTTR_TRACKER_URL: http://mttr-tracker:8080
+      GATEWAY_PORT: "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mttr-tracker:
+        condition: service_started
+    command: ["python", "-m", "gateway"]
+
+  # ── MTTR Tracker (Golang) ─────────────────────────
+  mttr-tracker:
+    build:
+      context: ./golang
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DB_DRIVER: postgresql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: maritime_compliance
+      DB_USER: postgres
+      DB_PASSWORD: mysecretpassword
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ── PII Anonymiser (Python) ────────────────────────
+  anonymiser:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - ./data/manifests:/data/manifests:ro
+      - ./data/output:/data/output
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "anonymiser.cli", "anonymise", "--manifest", "/data/manifests/sample.json", "--dry-run"]
+    profiles:
+      - tools
+
+  # ── EDI SQL Auditor (Python) ───────────────────────
+  auditor:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "edi_auditor.cli"]
+    command: ["run", "--all"]
+    profiles:
+      - tools
+
+  # ── Remediation Generator (Python) ─────────────────
+  remediation:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "remediation.cli"]
+    command: ["generate-policies", "--mode", "dry-run"]
+    profiles:
+      - tools
+
+volumes:
+  pgdata:
+
+========== python/requirements.txt ==========
+# Maritime Global Compliance Swarm - Python Dependencies
+
+# Core
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9
+alembic>=1.13
+
+# Cryptography & Tokenisation
+cryptography>=42.0
+pyhcl2>=0.0.5
+
+# CLI
+click>=8.1
+rich>=13.7
+
+# Environment
+dotenv>=1.0
+pydantic>=2.5
+pydantic-settings>=2.1
+
+# API Gateway
+fastapi>=0.115
+uvicorn[standard]>=0.32
+httpx>=0.27
+
+# Utilities
+datetime>=5.0
+jinja2>=3.1
+pyyaml>=6.0
+
+# NER / ML (optional — system runs in regex-only mode without these)
+spacy>=3.7
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+
+# Testing
+pytest>=8.0
+pytest-cov>=4.1
+pytest-mock>=3.12
+
+# Linting
+ruff>=0.3
+mypy>=1.8
+
+========== python/shared/config.py ==========
+"""Centralised configuration for the Maritime Compliance Swarm.
+
+Loads settings from environment variables with sensible defaults.
+Supports both development (SQLite) and production (PostgreSQL) modes.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class DatabaseConfig:
+    """Database connection parameters."""
+    driver: str = field(default_factory=lambda: os.getenv("DB_DRIVER", "sqlite"))
+    host: str = field(default_factory=lambda: os.getenv("DB_HOST", "localhost"))
+    port: int = field(default_factory=lambda: int(os.getenv("DB_PORT", "5432")))
+    name: str = field(default_factory=lambda: os.getenv("DB_NAME", "maritime_compliance"))
+    user: str = field(default_factory=lambda: os.getenv("DB_USER", "postgres"))
+    password: str = field(default_factory=lambda: os.getenv("DB_PASSWORD", ""))
+    ssl_mode: str = field(default_factory=lambda: os.getenv("DB_SSL_MODE", "prefer"))
+
+    @property
+    def connection_string(self) -> str:
+        if self.driver == "sqlite":
+            db_path = os.getenv("SQLITE_PATH", "data/compliance.db")
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            return f"sqlite:///{db_path}"
+        return (
+            f"postgresql+psycopg2://{self.user}:{self.password}"
+            f"@{self.host}:{self.port}/{self.name}"
+            f"?sslmode={self.ssl_mode}"
+        )
+
+
+@dataclass(frozen=True)
+class AnonymiserConfig:
+    """PII Anonymiser settings."""
+    token_prefix: str = field(default_factory=lambda: os.getenv("TOKEN_PREFIX", "MTS"))
+    hashing_algorithm: str = field(default_factory=lambda: os.getenv("HASH_ALGO", "SHA256"))
+    hmac_key: str = field(default_factory=lambda: os.getenv("HMAC_KEY", ""))
+    date_format_mask: str = field(default_factory=lambda: os.getenv("DATE_MASK", "****-**-**"))
+    preserve_domain: bool = field(default_factory=lambda: os.getenv("PRESERVE_DOMAIN", "true").lower() == "true")
+    fields_to_anonymise: list[str] = field(default_factory=lambda: [
+        "consignee_name", "consignee_address", "consignee_email", "consignee_phone",
+        "shipper_name", "shipper_address", "shipper_email", "shipper_phone",
+        "notify_party", "agent_name", "forwarder_contact",
+        "passport_number", "national_id", "tax_id",
+    ])
+
+
+@dataclass(frozen=True)
+class AuditorConfig:
+    """EDI SQL Auditor settings."""
+    fms_connection_string: str = field(default_factory=lambda: os.getenv(
+        "FMS_CONNECTION_STRING", ""
+    ))
+    audit_batch_size: int = field(default_factory=lambda: int(os.getenv("AUDIT_BATCH_SIZE", "1000")))
+    check_encryption: bool = field(default_factory=lambda: os.getenv(
+        "CHECK_ENCRYPTION", "true"
+    ).lower() == "true")
+    check_customs_docs: bool = field(default_factory=lambda: os.getenv(
+        "CHECK_CUSTOMS_DOCS", "true"
+    ).lower() == "true")
+    check_edi_compliance: bool = field(default_factory=lambda: os.getenv(
+        "CHECK_EDI_COMPLIANCE", "true"
+    ).lower() == "true")
+    edi_standards: list[str] = field(default_factory=lambda: [
+        "EDIFACT", "ANSI X12", "BAPLIE", "VGM",
+    ])
+    max_unencrypted_age_hours: int = field(default_factory=lambda: int(
+        os.getenv("MAX_UNENCRYPTED_AGE_HOURS", "24")
+    ))
+
+
+@dataclass(frozen=True)
+class RemediationConfig:
+    """Remediation Route Generator settings."""
+    auto_apply_policies: bool = field(default_factory=lambda: os.getenv(
+        "AUTO_APPLY_POLICIES", "false"
+    ).lower() == "true")
+    policy_output_dir: str = field(default_factory=lambda: os.getenv(
+        "POLICY_OUTPUT_DIR", "policies/"))
+    edi_profile_update_mode: str = field(default_factory=lambda: os.getenv(
+        "EDI_UPDATE_MODE", "dry-run")  # dry-run | apply | staged
+    )
+    notification_webhook: Optional[str] = field(default_factory=lambda: os.getenv(
+        "NOTIFICATION_WEBHOOK", None
+    ))
+
+
+@dataclass(frozen=True)
+class TelemetryConfig:
+    """MTTR Telemetry Tracker settings."""
+    grpc_port: int = field(default_factory=lambda: int(os.getenv("MTTR_GRPC_PORT", "50051")))
+    http_port: int = field(default_factory=lambda: int(os.getenv("MTTR_HTTP_PORT", "8080")))
+    flush_interval_seconds: int = field(default_factory=lambda: int(
+        os.getenv("MTTR_FLUSH_INTERVAL", "10")
+    ))
+    retention_days: int = field(default_factory=lambda: int(os.getenv("MTTR_RETENTION_DAYS", "90")))
+
+
+@dataclass
+class SwarmConfig:
+    """Top-level configuration aggregating all tool configs."""
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    anonymiser: AnonymiserConfig = field(default_factory=AnonymiserConfig)
+    auditor: AuditorConfig = field(default_factory=AuditorConfig)
+    remediation: RemediationConfig = field(default_factory=RemediationConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    log_file: Optional[str] = field(default_factory=lambda: os.getenv("LOG_FILE", None))
+
+    @classmethod
+    def from_env(cls) -> "SwarmConfig":
+        """Load configuration from environment variables."""
+        return cls()
+
+========== python/shared/database.py ==========
+"""Database session management for the Maritime Compliance Swarm.
+
+Provides engine creation, session factories, and schema migration helpers.
+Supports SQLite (development) and PostgreSQL (production) via config.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Generator
+
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import Session, sessionmaker
+
+from .config import SwarmConfig
+from .models import Base
+
+logger = logging.getLogger(__name__)
+
+
+def _enable_sqlite_wal(dbapi_conn, connection_record):
+    """Enable WAL mode for better SQLite concurrency."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+def create_engine_from_config(config: SwarmConfig):
+    """Create a SQLAlchemy engine based on the swarm configuration.
+
+    Automatically applies driver-specific pragmas and pool settings.
+    """
+    db_config = config.database
+    url = db_config.connection_string
+
+    kwargs = {
+        "echo": config.log_level == "DEBUG",
+        "pool_pre_ping": True,
+    }
+
+    if db_config.driver == "sqlite":
+        kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        kwargs["pool_size"] = 10
+        kwargs["max_overflow"] = 20
+        kwargs["pool_recycle"] = 3600
+
+    engine = create_engine(url, **kwargs)
+
+    if db_config.driver == "sqlite":
+        event.listen(engine, "connect", _enable_sqlite_wal)
+
+    logger.info("Database engine created: driver=%s", db_config.driver)
+    return engine
+
+
+def init_schema(engine) -> None:
+    """Create all tables if they do not exist."""
+    Base.metadata.create_all(engine)
+    logger.info("Database schema initialised")
+
+
+def get_session_factory(engine) -> sessionmaker[Session]:
+    """Return a configured sessionmaker bound to the given engine."""
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def get_session(session_factory: sessionmaker[Session]) -> Generator[Session, None, None]:
+    """FastAPI/CLI dependency that yields a session and ensures cleanup."""
+    session = session_factory()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+========== python/gateway/schemas.py ==========
+"""Pydantic request/response schemas for the Compliance Swarm API gateway.
+
+All schemas use strict typing and provide OpenAPI documentation.
+Schemas mirror the ORM models but are decoupled for API layer cleanliness.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+# ── Enum wrappers (serialisable as strings) ──────────────────────────────
+
+class PIIFieldCategory(str, Enum):
+    CONSIGNEE_IDENTITY = "consignee_identity"
+    SHIPPER_IDENTITY = "shipper_identity"
+    CONTACT_INFO = "contact_info"
+    FINANCIAL_ID = "financial_id"
+    GOVERNMENT_ID = "government_id"
+    LOCATION = "location"
+
+
+class AuditSeverity(str, Enum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+
+class AuditStatus(str, Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    REMEDIATED = "remediated"
+    ACCEPTED_RISK = "accepted_risk"
+    FALSE_POSITIVE = "false_positive"
+
+
+class EDIStandard(str, Enum):
+    EDIFACT = "EDIFACT"
+    ANSI_X12 = "ANSI_X12"
+    BAPLIE = "BAPLIE"
+    VGM = "VGM"
+    COPARN = "COPARN"
+    IFTMBC = "IFTMBC"
+    CUSTOMS = "CUSTOMS"
+
+
+class PolicyAction(str, Enum):
+    TOKENISE = "tokenise"
+    REDACT = "redact"
+    GENERALISE = "generalise"
+    PSEUDONYMISE = "pseudonymise"
+    ENCRYPT = "encrypt"
+    TRUNCATE = "truncate"
+
+
+class RiskCategory(str, Enum):
+    PII_EXPOSURE = "pii_exposure"
+    UNENCRYPTED_TRANSIMISSION = "unencrypted_transmission"
+    MISSING_CUSTOMS_DOC = "missing_customs_doc"
+    EDI_NON_COMPLIANCE = "edi_non_compliance"
+    DATA_RETENTION_VIOLATION = "data_retention_violation"
+    ACCESS_CONTROL_BREACH = "access_control_breach"
+    CERT_EXPIRY = "cert_expiry"
+
+
+class RemediationMode(str, Enum):
+    DRY_RUN = "dry-run"
+    STAGED = "staged"
+    APPLY = "apply"
+
+
+class EventPhase(str, Enum):
+    IDENTIFIED = "identified"
+    ASSIGNED = "assigned"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    VERIFIED = "verified"
+
+
+class ComplianceDomain(str, Enum):
+    ENCRYPTION = "encryption"
+    CUSTOMS_DOCUMENTATION = "customs_documentation"
+    EDI_FORMAT = "edi_format"
+    DATA_RETENTION = "data_retention"
+    ACCESS_CONTROL = "access_control"
+
+
+class Jurisdiction(str, Enum):
+    GDPR = "GDPR"
+    CCPA = "CCPA"
+    LGPD = "LGPD"
+    PDPA = "PDPA"
+    PIPA = "PIPA"
+
+
+# ── Anonymiser schemas ────────────────────────────────────────────────────
+
+class ManifestAnonymiseRequest(BaseModel):
+    """Request to anonymise a shipping manifest."""
+    manifest_id: str = Field(..., min_length=1, description="Unique manifest identifier (e.g. B/L number)")
+    manifest: dict[str, Any] = Field(..., description="Raw manifest fields with potential PII")
+    free_text_fields: list[str] = Field(default_factory=list, description="Keys in manifest containing free-text to scan")
+
+
+class AnonymisedField(BaseModel):
+    """Result of anonymising a single field."""
+    field_name: str
+    field_category: str
+    token: str
+    original_hash: str
+
+
+class ManifestAnonymiseResponse(BaseModel):
+    """Response from manifest anonymisation."""
+    manifest_id: str
+    anonymised_manifest: dict[str, Any]
+    fields_processed: int
+    records: list[AnonymisedField]
+
+
+class ScanRequest(BaseModel):
+    """Request to scan a manifest for PII without anonymising."""
+    manifest: dict[str, Any] = Field(..., description="Manifest fields to scan")
+    jurisdiction: Optional[Jurisdiction] = Field(None, description="Filter rules by jurisdiction")
+
+
+class ScanMatch(BaseModel):
+    """A single PII match from scanning."""
+    field_name: str
+    category: str
+    description: str
+    mandatory: bool
+    retention_max_days: int
+    jurisdictions: list[str]
+
+
+class ScanResponse(BaseModel):
+    """PII scan results for a manifest."""
+    total_fields: int
+    pii_fields_found: int
+    matches: dict[str, list[ScanMatch]]
+
+
+class FreeTextAnonymiseRequest(BaseModel):
+    """Request to anonymise free-text content."""
+    manifest_id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, description="Free-text content to scan and anonymise")
+
+
+class FreeTextAnonymiseResponse(BaseModel):
+    """Response from free-text anonymisation."""
+    manifest_id: str
+    anonymised_text: str
+    patterns_found: int
+    records: list[AnonymisedField]
+
+
+# ── Auditor schemas ──────────────────────────────────────────────────────
+
+class RunAuditRequest(BaseModel):
+    """Request to trigger a compliance audit run."""
+    domain: Optional[ComplianceDomain] = Field(None, description="Limit to a specific compliance domain")
+    min_severity: Optional[AuditSeverity] = Field(None, description="Minimum severity to include")
+
+
+class AuditFindingSummary(BaseModel):
+    """Summary of a single audit finding."""
+    finding_ref: str
+    severity: str
+    affected_row_count: int
+    title: str
+    query_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class RunAuditResponse(BaseModel):
+    """Response from an audit run."""
+    queries_executed: int
+    findings_count: int
+    findings: list[AuditFindingSummary]
+
+
+class AuditQueryInfo(BaseModel):
+    """Metadata about a single audit query."""
+    query_id: str
+    name: str
+    domain: str
+    severity: str
+    risk_category: str
+    affected_tables: list[str]
+    description: str
+    remediation_hint: str
+
+
+class ProfileComplianceInfo(BaseModel):
+    """Compliance status of a single EDI connection profile."""
+    partner_id: str
+    partner_name: str
+    edi_standard: Optional[str] = None
+    encryption_enabled: bool
+    encryption_protocol: Optional[str] = None
+    issues: list[str]
+    last_audit_at: Optional[datetime] = None
+    compliant: bool
+
+
+# ── Remediation schemas ───────────────────────────────────────────────────
+
+class GeneratePoliciesRequest(BaseModel):
+    """Request to generate remediation policies."""
+    finding_refs: Optional[list[str]] = Field(None, description="Specific findings to remediate (None = all open)")
+    mode: RemediationMode = Field(RemediationMode.DRY_RUN, description="dry-run | staged | apply")
+
+
+class GeneratedPolicy(BaseModel):
+    """Summary of a generated or proposed policy."""
+    policy_id: Optional[str] = None
+    name: str
+    action: Optional[str] = None
+    enabled: Optional[bool] = None
+    status: str
+    mode: str
+    finding_ref: Optional[str] = None
+    severity: Optional[str] = None
+
+
+class GeneratePoliciesResponse(BaseModel):
+    """Response from policy generation."""
+    findings_processed: int
+    policies_generated: int
+    mode: str
+    policies: list[GeneratedPolicy]
+
+
+class UpdateEDIRequest(BaseModel):
+    """Request to update EDI profiles based on findings."""
+    finding_refs: Optional[list[str]] = Field(None)
+    mode: RemediationMode = Field(RemediationMode.DRY_RUN)
+
+
+class ProfileChange(BaseModel):
+    """A single change applied to a profile."""
+    from_value: Any
+    to_value: Any
+
+
+class ProfileUpdateResult(BaseModel):
+    """Result of updating a single partner profile."""
+    partner_id: str
+    partner_name: Optional[str] = None
+    action: str
+    changes: dict[str, ProfileChange]
+    mode: str
+
+
+class UpdateEDIResponse(BaseModel):
+    """Response from EDI profile updates."""
+    profiles_processed: int
+    mode: str
+    results: list[ProfileUpdateResult]
+
+
+# ── MTTR schemas (proxy to Golang) ───────────────────────────────────────
+
+class IngestEventRequest(BaseModel):
+    """Request to record a telemetry event for MTTR tracking."""
+    finding_id: str = Field(..., min_length=1)
+    phase: EventPhase
+    assignee: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MTTRTimelineEvent(BaseModel):
+    """A single event in a finding's timeline."""
+    id: str
+    finding_id: str
+    phase: str
+    timestamp: str
+    assignee: Optional[str] = None
+    duration_seconds: Optional[float] = None
+
+
+class FindingMTTRResponse(BaseModel):
+    """MTTR data for a single finding."""
+    finding_id: str
+    mttr_hours: Optional[float] = None
+    event_count: int
+    events: list[MTTRTimelineEvent]
+
+
+class MTTRReportResponse(BaseModel):
+    """Aggregate MTTR report."""
+    total_findings: int = 0
+    avg_mttr_hours: float = 0.0
+    p95_mttr_hours: float = 0.0
+    by_severity: dict[str, Any] = Field(default_factory=dict)
+    by_risk_category: dict[str, Any] = Field(default_factory=dict)
+    period_from: Optional[str] = None
+    period_to: Optional[str] = None
+
+
+class OpenFindingMTTR(BaseModel):
+    """An open finding with its current MTTR."""
+    finding_id: str
+    finding_ref: str
+    severity: str
+    risk_category: str
+    title: str
+    mttr_hours: float
+    current_phase: str
+    age_hours: float
+
+
+# ── Findings / Policies query schemas ─────────────────────────────────────
+
+class FindingsListResponse(BaseModel):
+    """List of audit findings with optional filtering."""
+    total: int
+    findings: list[dict[str, Any]]
+
+
+class PoliciesListResponse(BaseModel):
+    """List of masking policies."""
+    total: int
+    policies: list[dict[str, Any]]
+
+
+class ComplianceReportResponse(BaseModel):
+    """A compliance summary report."""
+    id: str
+    report_period_start: datetime
+    report_period_end: datetime
+    total_findings: int
+    critical_count: int
+    high_count: int
+    medium_count: int
+    low_count: int
+    remediated_count: int
+    avg_mttr_hours: float
+    summary: Optional[str] = None
+
+
+# ── NER Anonymiser schemas ─────────────────────────────────────────────
+
+class NEREntitySchema(BaseModel):
+    """A named entity detected by the NER layer."""
+    text: str
+    label: str
+    category: str
+    start: int
+    end: int
+    confidence: float = 1.0
+    source: str
+
+
+class NERScanRequest(BaseModel):
+    """Request to scan text with NER for PII detection."""
+    text: str = Field(..., min_length=1, description="Text to analyse with NER")
+    pii_only: bool = Field(True, description="Return only PII entities (PERSON, ORG)")
+
+
+class NERScanResponse(BaseModel):
+    """Response from NER scan."""
+    text_length: int
+    entities_found: int
+    layers_used: list[str]
+    spacy_available: bool
+    entities: list[NEREntitySchema]
+
+
+class NERAnonymiseRequest(BaseModel):
+    """Request to anonymise text using NER-detected entities."""
+    manifest_id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, description="Free-text to anonymise via NER")
+
+
+class NERAnonymiseResponse(BaseModel):
+    """Response from NER-based anonymisation."""
+    manifest_id: str
+    anonymised_text: str
+    entities_replaced: int
+    records: list[dict[str, Any]]
+
+
+# ── Query Registry schemas ─────────────────────────────────────────────
+
+class CreateQueryRequest(BaseModel):
+    """Request to create a new audit query in the registry."""
+    query_id: str = Field(..., min_length=1, max_length=32, description="Unique query identifier (e.g. AUD-ENC-004)")
+    name: str = Field(..., min_length=1, max_length=256)
+    domain: str = Field(..., description="Compliance domain")
+    sql_template: str = Field(..., min_length=1, description="SQL template with {param} placeholders")
+    severity: str = Field("high", description="Severity level")
+    risk_category: str = Field("edi_non_compliance")
+    description: str = Field("")
+    affected_tables: list[str] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    remediation_hint: str = Field("")
+    is_active: bool = Field(True)
+
+
+class UpdateQueryRequest(BaseModel):
+    """Request to update an existing audit query (creates new version)."""
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    sql_template: Optional[str] = None
+    severity: Optional[str] = None
+    risk_category: Optional[str] = None
+    description: Optional[str] = None
+    affected_tables: Optional[list[str]] = None
+    parameters: Optional[dict[str, Any]] = None
+    remediation_hint: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class RegistryQueryInfo(BaseModel):
+    """A query entry from the registry."""
+    id: str
+    query_id: str
+    version: int
+    name: str
+    domain: str
+    description: str
+    severity: str
+    risk_category: str
+    affected_tables: list[str]
+    parameters: dict[str, Any]
+    remediation_hint: str
+    is_active: bool
+    is_builtin: bool
+    content_hash: str
+    created_by: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class RegistryStatsResponse(BaseModel):
+    """Statistics about the query registry."""
+    total_queries: int
+    active_queries: int
+    builtin_queries: int
+    custom_queries: int
+    by_domain: dict[str, int]
+
+
+class SeedRegistryResponse(BaseModel):
+    """Response from seeding the registry with default queries."""
+    queries_seeded: int
+    message: str
+
+
+# ── Connectivity / diagnostics schemas ───────────────────────────────────
+
+class ComponentStatus(BaseModel):
+    """Status of a single system component."""
+    name: str
+    status: str  # ok | degraded | unavailable
+    latency_ms: Optional[float] = None
+    detail: Optional[str] = None
+
+
+class ConnectivityResponse(BaseModel):
+    """Comprehensive connectivity check for the frontend.
+
+    Tests every system component and returns detailed status with latency,
+    confirming the frontend can effectively communicate with all backend
+    services and middleware.
+    """
+    status: str  # ok | degraded | down
+    timestamp: str
+    gateway_version: str
+    components: dict[str, ComponentStatus]
+    database: ComponentStatus
+    ner_layers: list[str]
+    mttr_proxy: ComponentStatus
+    query_registry: ComponentStatus
+    active_routes: int
+    total_routes: int
