@@ -200,7 +200,8 @@ func computeMTTRHours(events []models.MTTRTrackingEvent) float64 {
                 if e.Phase == "identified" {
                         identified = e.Timestamp
                 }
-                if e.Phase == "resolved" {
+                // Accept both 'resolved' (legacy) and 'verified' (state machine) as end points
+                if e.Phase == "resolved" || e.Phase == "verified" {
                         resolved = e.Timestamp
                 }
         }
