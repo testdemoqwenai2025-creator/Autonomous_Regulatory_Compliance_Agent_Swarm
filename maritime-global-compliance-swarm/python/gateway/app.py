@@ -46,12 +46,17 @@ from shared.models import (
     EDIConnectionProfile,
     MaskingPolicy,
     MTTRTrackingEvent,
+    PIIFieldCategory,
     RiskCategory,
 )
+import time
+
 from anonymiser.tokeniser import PIITokeniser
 from anonymiser.rules import RuleEngine
+from anonymiser.ner_detector import MaritimeNERDetector
 from edi_auditor.auditor import EDIAuditor
 from edi_auditor.queries import ALL_AUDIT_QUERIES, ComplianceDomain, get_queries_by_domain
+from edi_auditor.registry import QueryRegistry
 from remediation.policy_gen import PolicyGenerator
 from remediation.edi_updater import EDIProfileUpdater
 
@@ -62,6 +67,9 @@ from .schemas import (
     AuditSeverity as SchemaSeverity,
     ComplianceDomain as SchemaDomain,
     ComplianceReportResponse,
+    ComponentStatus,
+    ConnectivityResponse,
+    CreateQueryRequest,
     ErrorResponse,
     EventPhase,
     FindingsListResponse,
@@ -76,19 +84,28 @@ from .schemas import (
     ManifestAnonymiseRequest,
     ManifestAnonymiseResponse,
     MTTRReportResponse,
+    NERAnonymiseRequest,
+    NERAnonymiseResponse,
+    NEREntitySchema,
+    NERScanRequest,
+    NERScanResponse,
     OpenFindingMTTR,
     PoliciesListResponse,
     ProfileChange,
     ProfileComplianceInfo,
     ProfileUpdateResult,
+    RegistryQueryInfo,
+    RegistryStatsResponse,
     RemediationMode,
     RunAuditRequest,
     RunAuditResponse,
     ScanMatch,
     ScanRequest,
     ScanResponse,
+    SeedRegistryResponse,
     UpdateEDIRequest,
     UpdateEDIResponse,
+    UpdateQueryRequest,
     FindingMTTRResponse,
     MTTRTimelineEvent,
 )
@@ -104,6 +121,8 @@ _rule_engine: Optional[RuleEngine] = None
 _auditor: Optional[EDIAuditor] = None
 _policy_generator: Optional[PolicyGenerator] = None
 _edi_updater: Optional[EDIProfileUpdater] = None
+_ner_detector: Optional[MaritimeNERDetector] = None
+_query_registry: Optional[QueryRegistry] = None
 _mttr_base_url: str = "http://localhost:8080"
 
 
@@ -117,6 +136,7 @@ def create_app(config: Optional[SwarmConfig] = None) -> FastAPI:
     """
     global _config, _session_factory, _anonymiser, _rule_engine
     global _auditor, _policy_generator, _edi_updater, _mttr_base_url
+    global _ner_detector, _query_registry
 
     _config = config or SwarmConfig.from_env()
 
@@ -138,6 +158,9 @@ def create_app(config: Optional[SwarmConfig] = None) -> FastAPI:
     _auditor = EDIAuditor(_config)
     _policy_generator = PolicyGenerator(_config)
     _edi_updater = EDIProfileUpdater(_config)
+    _ner_detector = MaritimeNERDetector()
+    _query_registry = QueryRegistry(_session_factory)
+    _query_registry.seed_defaults()
 
     # MTTR tracker URL (Golang service)
     _mttr_base_url = os.getenv(
@@ -178,8 +201,11 @@ def create_app(config: Optional[SwarmConfig] = None) -> FastAPI:
     # ── Register routers ──────────────────────────────────────────────
 
     _register_health_routes(app)
+    _register_connectivity_route(app)
     _register_anonymiser_routes(app)
+    _register_ner_routes(app)
     _register_auditor_routes(app)
+    _register_registry_routes(app)
     _register_remediation_routes(app)
     _register_mttr_routes(app)
     _register_query_routes(app)
@@ -209,6 +235,188 @@ def _register_health_routes(app: FastAPI):
             status="healthy",
             service="compliance-swarm-gateway",
             tools=tool_status,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  CONNECTIVITY (frontend -> backend -> middleware diagnostics)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _register_connectivity_route(app: FastAPI):
+
+    @app.get(
+        "/api/v1/system/connectivity",
+        response_model=ConnectivityResponse,
+        tags=["system"],
+    )
+    async def connectivity_check():
+        """Comprehensive connectivity diagnostics for the frontend.
+
+        Tests every backend component and middleware connection, returning
+        detailed status with latency measurements. The frontend calls this
+        endpoint to confirm it can effectively communicate with all backend
+        services, tools, and the Golang MTTR tracker.
+
+        Returns per-component status: ok | degraded | unavailable.
+        """
+        from sqlalchemy import text as sa_text
+
+        ts = datetime.now(timezone.utc).isoformat()
+        components = {}
+        all_ok = True
+
+        # 1. Database connectivity
+        db_status = "ok"
+        db_latency = None
+        db_detail = None
+        try:
+            t0 = time.monotonic()
+            with _session_factory() as session:
+                session.execute(sa_text("SELECT 1")).scalar()
+            db_latency = round((time.monotonic() - t0) * 1000, 2)
+        except Exception as e:
+            db_status = "unavailable"
+            db_detail = str(e)[:200]
+            all_ok = False
+        database_status = ComponentStatus(
+            name="Compliance Database",
+            status=db_status,
+            latency_ms=db_latency,
+            detail=db_detail,
+        )
+        components["database"] = database_status
+
+        # 2. PII Anonymiser
+        t0 = time.monotonic()
+        try:
+            _anonymiser._vault.tokenise("connectivity-test", PIIFieldCategory.CONTACT_INFO)
+            anonymiser_status = "ok"
+        except Exception:
+            anonymiser_status = "unavailable"
+            all_ok = False
+        anonymiser_latency = round((time.monotonic() - t0) * 1000, 2)
+        components["anonymiser"] = ComponentStatus(
+            name="PII Anonymiser",
+            status=anonymiser_status,
+            latency_ms=anonymiser_latency,
+        )
+
+        # 3. NER Detector
+        t0 = time.monotonic()
+        try:
+            _ner_detector.detect("Test text")
+            ner_status = "ok"
+        except Exception:
+            ner_status = "unavailable"
+            all_ok = False
+        ner_latency = round((time.monotonic() - t0) * 1000, 2)
+        components["ner_detector"] = ComponentStatus(
+            name="NER Detector",
+            status=ner_status,
+            latency_ms=ner_latency,
+            detail=f"layers: {_ner_detector.layers_available}, spacy: {_ner_detector.spacy_available}",
+        )
+
+        # 4. EDI Auditor
+        t0 = time.monotonic()
+        try:
+            _rule_engine.find_matching_rules("consignee_name")
+            auditor_status = "ok"
+        except Exception:
+            auditor_status = "unavailable"
+            all_ok = False
+        auditor_latency = round((time.monotonic() - t0) * 1000, 2)
+        components["auditor"] = ComponentStatus(
+            name="EDI SQL Auditor",
+            status=auditor_status,
+            latency_ms=auditor_latency,
+        )
+
+        # 5. Remediation Generator
+        t0 = time.monotonic()
+        try:
+            from remediation.policy_gen import REMEDIATION_MATRIX
+            _ = len(REMEDIATION_MATRIX)
+            remediation_status = "ok"
+        except Exception:
+            remediation_status = "unavailable"
+            all_ok = False
+        remediation_latency = round((time.monotonic() - t0) * 1000, 2)
+        components["remediation"] = ComponentStatus(
+            name="Remediation Generator",
+            status=remediation_status,
+            latency_ms=remediation_latency,
+        )
+
+        # 6. MTTR Proxy (Golang)
+        mttr_status = "unavailable"
+        mttr_latency = None
+        mttr_detail = None
+        try:
+            t0 = time.monotonic()
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{_mttr_base_url}/health")
+                mttr_latency = round((time.monotonic() - t0) * 1000, 2)
+                if resp.status_code == 200:
+                    mttr_status = "ok"
+                else:
+                    mttr_status = "degraded"
+                    mttr_detail = f"HTTP {resp.status_code}"
+        except httpx.ConnectError:
+            mttr_detail = f"Cannot connect to {_mttr_base_url}"
+        except Exception as e:
+            mttr_detail = str(e)[:200]
+
+        if mttr_status == "unavailable":
+            all_ok = False
+
+        mttr_component = ComponentStatus(
+            name="MTTR Tracker (Go)",
+            status=mttr_status,
+            latency_ms=mttr_latency,
+            detail=mttr_detail,
+        )
+        components["mttr_tracker"] = mttr_component
+
+        # 7. Query Registry
+        t0 = time.monotonic()
+        try:
+            stats = _query_registry.get_statistics()
+            registry_status = "ok"
+            registry_detail = f"{stats['active_queries']} active, {stats['builtin_queries']} builtin"
+        except Exception as e:
+            registry_status = "unavailable"
+            registry_detail = str(e)[:200]
+            all_ok = False
+        registry_latency = round((time.monotonic() - t0) * 1000, 2)
+        registry_component = ComponentStatus(
+            name="Query Registry",
+            status=registry_status,
+            latency_ms=registry_latency,
+            detail=registry_detail,
+        )
+        components["query_registry"] = registry_component
+
+        overall = "ok" if all_ok else ("degraded" if db_status == "ok" else "down")
+
+        # Count routes
+        total_routes = len(app.routes)
+        active_routes = sum(
+            1 for r in app.routes
+            if hasattr(r, "methods") and hasattr(r, "path")
+        )
+
+        return ConnectivityResponse(
+            status=overall,
+            timestamp=ts,
+            gateway_version="1.1.0",
+            components=components,
+            database=database_status,
+            ner_layers=_ner_detector.layers_available,
+            mttr_proxy=mttr_component,
+            query_registry=registry_component,
+            active_routes=active_routes,
+            total_routes=total_routes,
         )
 
 
@@ -344,6 +552,87 @@ def _register_anonymiser_routes(app: FastAPI):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+#  1B. NER-BASED PII DETECTION (ML layer)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _register_ner_routes(app: FastAPI):
+
+    @app.post(
+        "/api/v1/anonymise/ner/scan",
+        response_model=NERScanResponse,
+        tags=["1b. NER PII Detection"],
+    )
+    async def ner_scan(req: NERScanRequest):
+        """Scan text with NER for PII entity detection.
+
+        Runs multi-layer NER (maritime patterns, multi-script person names,
+        organisation patterns, and spaCy if available). Returns all detected
+        entities with positions, labels, and confidence scores.
+        """
+        if req.pii_only:
+            entities = _ner_detector.detect_pii_entities(req.text)
+        else:
+            entities = _ner_detector.detect(req.text)
+
+        return NERScanResponse(
+            text_length=len(req.text),
+            entities_found=len(entities),
+            layers_used=_ner_detector.layers_available,
+            spacy_available=_ner_detector.spacy_available,
+            entities=[
+                NEREntitySchema(
+                    text=e.text,
+                    label=e.label,
+                    category=e.category,
+                    start=e.start,
+                    end=e.end,
+                    confidence=e.confidence,
+                    source=e.source,
+                )
+                for e in entities
+            ],
+        )
+
+    @app.post(
+        "/api/v1/anonymise/ner/anonymise",
+        response_model=NERAnonymiseResponse,
+        tags=["1b. NER PII Detection"],
+    )
+    async def ner_anonymise(req: NERAnonymiseRequest):
+        """Anonymise free-text using NER-detected PII entities.
+
+        Detects PERSON and ORG entities via NER and replaces them
+        with HMAC-SHA256 tokens. Records are persisted to the database.
+        """
+        anonymised_text, records = _ner_detector.anonymise_text_with_ner(
+            text=req.text,
+            tokeniser=_anonymiser,
+            manifest_id=req.manifest_id,
+        )
+
+        # Persist records
+        persisted = []
+        with _session_factory() as session:
+            for rec in records:
+                db_rec = AnonymisationRecord(
+                    manifest_id=req.manifest_id,
+                    field_name=rec["field_name"],
+                    field_category=PIIFieldCategory.CONTACT_INFO,
+                    original_hash=_anonymiser._vault.hash_original(rec["text"]),
+                    token=rec["token"],
+                )
+                session.add(db_rec)
+                persisted.append(rec)
+
+        return NERAnonymiseResponse(
+            manifest_id=req.manifest_id,
+            anonymised_text=anonymised_text,
+            entities_replaced=len(persisted),
+            records=persisted,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
 #  2. EDI SQL AUDITOR
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -444,6 +733,153 @@ def _register_auditor_routes(app: FastAPI):
             )
             for q in queries
         ]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  2B. QUERY REGISTRY (pluggable, versioned, DB-backed)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _register_registry_routes(app: FastAPI):
+
+    @app.get(
+        "/api/v1/audit/registry/queries",
+        response_model=list[RegistryQueryInfo],
+        tags=["2b. Query Registry"],
+    )
+    async def registry_list(
+        domain: Optional[str] = Query(None),
+        include_inactive: bool = Query(False),
+    ):
+        """List queries from the pluggable registry.
+
+        Returns all active queries (or all including inactive) from
+        the database-backed registry. Supports domain filtering.
+        """
+        queries = _query_registry.get_active_queries(domain=domain)
+        if not include_inactive:
+            queries = [q for q in queries if q.get("is_active", True)]
+        return [RegistryQueryInfo(**q) for q in queries]
+
+    @app.get(
+        "/api/v1/audit/registry/queries/{query_id}",
+        response_model=RegistryQueryInfo,
+        responses={404: {"model": ErrorResponse}},
+        tags=["2b. Query Registry"],
+    )
+    async def registry_get(query_id: str):
+        """Get the active version of a specific query from the registry."""
+        q = _query_registry.get_query(query_id)
+        if not q:
+            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found or inactive")
+        return RegistryQueryInfo(**q)
+
+    @app.get(
+        "/api/v1/audit/registry/queries/{query_id}/versions",
+        response_model=list[RegistryQueryInfo],
+        tags=["2b. Query Registry"],
+    )
+    async def registry_versions(query_id: str):
+        """Get all versions of a specific query.
+
+        Useful for comparing regulatory changes across versions.
+        """
+        versions = _query_registry.get_query_versions(query_id)
+        if not versions:
+            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
+        return [RegistryQueryInfo(**v) for v in versions]
+
+    @app.post(
+        "/api/v1/audit/registry/queries",
+        response_model=RegistryQueryInfo,
+        responses={409: {"model": ErrorResponse}},
+        tags=["2b. Query Registry"],
+    )
+    async def registry_create(req: CreateQueryRequest):
+        """Create a new audit query in the registry.
+
+        The query is immediately available for audit runs.
+        Version auto-increments if query_id already exists.
+        """
+        try:
+            result = _query_registry.create_query(
+                data=req.model_dump(),
+                created_by="api",
+            )
+            return RegistryQueryInfo(**result)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.put(
+        "/api/v1/audit/registry/queries/{query_id}",
+        response_model=RegistryQueryInfo,
+        responses={404: {"model": ErrorResponse}},
+        tags=["2b. Query Registry"],
+    )
+    async def registry_update(query_id: str, req: UpdateQueryRequest):
+        """Update an existing query (creates a new version).
+
+        The old active version is deactivated. A new version is created
+        with the merged fields. This enables regulatory change tracking.
+        """
+        updates = {k: v for k, v in req.model_dump().items() if v is not None}
+        result = _query_registry.update_query(
+            query_id=query_id,
+            data=updates,
+            updated_by="api",
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
+        return RegistryQueryInfo(**result)
+
+    @app.delete(
+        "/api/v1/audit/registry/queries/{query_id}",
+        tags=["2b. Query Registry"],
+    )
+    async def registry_retire(query_id: str):
+        """Retire (deactivate) a query from the registry.
+
+        The query is soft-deleted — it remains in the database for
+        historical reference but will not be used in audit runs.
+        """
+        retired = _query_registry.retire_query(query_id)
+        if not retired:
+            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
+        return {"status": "retired", "query_id": query_id}
+
+    @app.get(
+        "/api/v1/audit/registry/stats",
+        response_model=RegistryStatsResponse,
+        tags=["2b. Query Registry"],
+    )
+    async def registry_stats():
+        """Get statistics about the query registry.
+
+        Returns counts of total, active, builtin, and custom queries,
+        broken down by domain.
+        """
+        stats = _query_registry.get_statistics()
+        return RegistryStatsResponse(
+            total_queries=stats["total_queries"],
+            active_queries=stats["active_queries"],
+            builtin_queries=stats["builtin_queries"],
+            custom_queries=stats["custom_queries"],
+            by_domain=stats["by_domain"],
+        )
+
+    @app.post(
+        "/api/v1/audit/registry/seed",
+        response_model=SeedRegistryResponse,
+        tags=["2b. Query Registry"],
+    )
+    async def registry_seed():
+        """Seed the registry with the 11 default audit queries.
+
+        Only inserts if the registry is empty. Safe to call multiple times.
+        """
+        count = _query_registry.seed_defaults()
+        if count == 0:
+            return SeedRegistryResponse(queries_seeded=0, message="Registry already populated")
+        return SeedRegistryResponse(queries_seeded=count, message=f"Seeded {count} default queries")
 
 
 # ══════════════════════════════════════════════════════════════════════════

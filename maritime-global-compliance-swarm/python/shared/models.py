@@ -60,6 +60,15 @@ class AuditSeverity(enum.Enum):
     INFO = "info"
 
 
+class EmissionsReportingDomain(enum.Enum):
+    """Emerging compliance domain for emissions reporting."""
+    EU_ETS = "eu_ets"
+    IMO_DCS = "imo_dcs"
+    MRV = "mrv"
+    CARBON_CREDIT = "carbon_credit"
+    FUEL_EU_MARITIME = "fuel_eu_maritime"
+
+
 class AuditStatus(enum.Enum):
     """Status of an audit finding."""
     OPEN = "open"
@@ -198,6 +207,35 @@ class MTTRTrackingEvent(Base):
     meta_data = Column(JSON, default=dict)
 
     finding = relationship("AuditFinding")
+
+
+class AuditQueryRegistry(Base):
+    """Pluggable audit query registry — database-backed, versioned queries.
+
+    Each query can have multiple versions. Only the active version
+    is used during audit runs. Old versions are retained for
+    historical comparison.
+    """
+    __tablename__ = "audit_query_registry"
+
+    id = Column(String(36), primary_key=True, default=_new_uuid)
+    query_id = Column(String(32), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    name = Column(String(256), nullable=False)
+    domain = Column(String(64), nullable=False, index=True)
+    description = Column(Text, nullable=False, default="")
+    sql_template = Column(Text, nullable=False)
+    severity = Column(String(16), nullable=False, default="high")
+    risk_category = Column(String(64), nullable=False, default="edi_non_compliance")
+    affected_tables = Column(JSON, default=list)
+    parameters = Column(JSON, default=dict)
+    remediation_hint = Column(Text, nullable=False, default="")
+    is_active = Column(Boolean, default=True, index=True)
+    is_builtin = Column(Boolean, default=False)
+    content_hash = Column(String(64), nullable=False)
+    created_by = Column(String(64), default="system")
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
 class ComplianceReport(Base):

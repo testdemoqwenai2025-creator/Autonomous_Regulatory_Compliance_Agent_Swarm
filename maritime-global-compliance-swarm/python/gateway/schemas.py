@@ -346,17 +346,139 @@ class ComplianceReportResponse(BaseModel):
     summary: Optional[str] = None
 
 
-# ── Health / generic ──────────────────────────────────────────────────────
+# ── NER Anonymiser schemas ─────────────────────────────────────────────
 
-class HealthResponse(BaseModel):
-    """Health check response."""
-    status: str
-    service: str
-    version: str = "1.0.0"
-    tools: dict[str, str]
+class NEREntitySchema(BaseModel):
+    """A named entity detected by the NER layer."""
+    text: str
+    label: str
+    category: str
+    start: int
+    end: int
+    confidence: float = 1.0
+    source: str
 
 
-class ErrorResponse(BaseModel):
-    """Standard error response."""
-    error: str
+class NERScanRequest(BaseModel):
+    """Request to scan text with NER for PII detection."""
+    text: str = Field(..., min_length=1, description="Text to analyse with NER")
+    pii_only: bool = Field(True, description="Return only PII entities (PERSON, ORG)")
+
+
+class NERScanResponse(BaseModel):
+    """Response from NER scan."""
+    text_length: int
+    entities_found: int
+    layers_used: list[str]
+    spacy_available: bool
+    entities: list[NEREntitySchema]
+
+
+class NERAnonymiseRequest(BaseModel):
+    """Request to anonymise text using NER-detected entities."""
+    manifest_id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, description="Free-text to anonymise via NER")
+
+
+class NERAnonymiseResponse(BaseModel):
+    """Response from NER-based anonymisation."""
+    manifest_id: str
+    anonymised_text: str
+    entities_replaced: int
+    records: list[dict[str, Any]]
+
+
+# ── Query Registry schemas ─────────────────────────────────────────────
+
+class CreateQueryRequest(BaseModel):
+    """Request to create a new audit query in the registry."""
+    query_id: str = Field(..., min_length=1, max_length=32, description="Unique query identifier (e.g. AUD-ENC-004)")
+    name: str = Field(..., min_length=1, max_length=256)
+    domain: str = Field(..., description="Compliance domain")
+    sql_template: str = Field(..., min_length=1, description="SQL template with {param} placeholders")
+    severity: str = Field("high", description="Severity level")
+    risk_category: str = Field("edi_non_compliance")
+    description: str = Field("")
+    affected_tables: list[str] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    remediation_hint: str = Field("")
+    is_active: bool = Field(True)
+
+
+class UpdateQueryRequest(BaseModel):
+    """Request to update an existing audit query (creates new version)."""
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    sql_template: Optional[str] = None
+    severity: Optional[str] = None
+    risk_category: Optional[str] = None
+    description: Optional[str] = None
+    affected_tables: Optional[list[str]] = None
+    parameters: Optional[dict[str, Any]] = None
+    remediation_hint: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class RegistryQueryInfo(BaseModel):
+    """A query entry from the registry."""
+    id: str
+    query_id: str
+    version: int
+    name: str
+    domain: str
+    description: str
+    severity: str
+    risk_category: str
+    affected_tables: list[str]
+    parameters: dict[str, Any]
+    remediation_hint: str
+    is_active: bool
+    is_builtin: bool
+    content_hash: str
+    created_by: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class RegistryStatsResponse(BaseModel):
+    """Statistics about the query registry."""
+    total_queries: int
+    active_queries: int
+    builtin_queries: int
+    custom_queries: int
+    by_domain: dict[str, int]
+
+
+class SeedRegistryResponse(BaseModel):
+    """Response from seeding the registry with default queries."""
+    queries_seeded: int
+    message: str
+
+
+# ── Connectivity / diagnostics schemas ───────────────────────────────────
+
+class ComponentStatus(BaseModel):
+    """Status of a single system component."""
+    name: str
+    status: str  # ok | degraded | unavailable
+    latency_ms: Optional[float] = None
     detail: Optional[str] = None
+
+
+class ConnectivityResponse(BaseModel):
+    """Comprehensive connectivity check for the frontend.
+
+    Tests every system component and returns detailed status with latency,
+    confirming the frontend can effectively communicate with all backend
+    services and middleware.
+    """
+    status: str  # ok | degraded | down
+    timestamp: str
+    gateway_version: str
+    components: dict[str, ComponentStatus]
+    database: ComponentStatus
+    ner_layers: list[str]
+    mttr_proxy: ComponentStatus
+    query_registry: ComponentStatus
+    active_routes: int
+    total_routes: int
