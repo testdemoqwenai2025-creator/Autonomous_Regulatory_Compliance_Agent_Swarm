@@ -51,16 +51,59 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 
 - **Buffered event ingestion** — in-memory buffer with configurable flush interval (default 10s)
 - **Background goroutine** — non-blocking writes to the database
-- **Five lifecycle phases** — identified, assigned, in_progress, resolved, verified
-- **MTTR calculation** — average and P95 metrics, broken down by severity and risk category
+- **Ten lifecycle phases** — aligned with Python FindingState: identified, triaged, assigned, in_progress, awaiting_verification, resolved, verified, escalated, risk_accepted, closed, false_positive
+- **MTTR calculation** — average and P95 metrics, broken down by severity and risk category; accepts both "resolved" and "verified" as MTTR end points
 - **SQLite (dev) / PostgreSQL (prod)** — driver-agnostic via configuration swap
-- **HTTP API** — 5 endpoints for event ingestion, finding timelines, and aggregate reports
+- **HTTP API** — 6 endpoints including `/api/v1/events/sm` for receiving state machine transition payloads
+- **Phase mapping** — `FindingStateToPhase` map translates all 10 Python FindingState values to Go EventPhase constants
 
-### 5. API Gateway + Dashboard (Python FastAPI)
+### 5. Finding State Machine (Python)
 
-- **20 REST routes** covering all four tools plus shared query endpoints
-- **Static HTML dashboard** — interactive dark-theme UI with tabbed interface for all tools
-- **Python Client SDK** — typed `httpx` client with Pydantic models for programmatic frontend integration
+- **10 states** — DETECTED, TRIAGED, ASSIGNED, IN_REMEDIATION, AWAITING_VERIFICATION, VERIFIED, CLOSED, ESCALATED, RISK_ACCEPTED, FALSE_POSITIVE
+- **20 transitions** — each with trigger, actor, guard conditions, timeout rules, and context payloads
+- **7 trigger types** — manual_triage, manual_assign, remediation_submitted, verification_passed, verification_failed, auto_escalate_timeout, manual_close, risk_accept, mark_false_positive
+- **Guard conditions** — e.g., CLOSURE requires no open remediation tasks; ESCALATION requires sign-off for CRITICAL findings
+- **Timeout SLAs** — per-severity auto-escalation (CRITICAL: 4h, HIGH: 8h, MEDIUM: 24h); with configurable hours per state
+- **Callback bridge** — registered callback on every successful transition auto-emits FINDING_STATE_CHANGED event to the event bus
+- **Go MTTR bridge** — async HTTP POST forwards every transition to Go service via `map_go_phase()` static method
+- **Full audit trail** — every transition persisted to `finding_transitions` table with before/after state, trigger, actor, context payload, and auto-escalation flag
+- **Manual timeout check** — `POST /api/v1/state-machine/timeout-check` endpoint scans all open findings and auto-escalates SLA breaches
+
+### 6. Event Bus (Python)
+
+- **Database-backed event store** — all events persisted to `event_log` table with full metadata
+- **PG LISTEN/NOTIFY fallback** — uses PostgreSQL real-time notifications when available; falls back to in-process queue for SQLite
+- **Background consumer loop** — processes queued events and dispatches to subscribers
+- **Subscriber API** — register handlers for specific event types with optional correlation ID filtering
+- **Statistics endpoint** — `GET /api/v1/events/stats` returns total events, processed count, queue depth, transport type, subscriber count
+- **Event log query** — `GET /api/v1/events` returns recent events with filtering
+- **Manual publish** — `POST /api/v1/events/publish` for testing and external integration
+
+### 7. Reaction Engine (Python)
+
+- **7 built-in reaction rules** with conditions and actions:
+  1. `react_critical_notification` — CRITICAL findings trigger EDI partner notification and auto-escalation
+  2. `react_pii_auto_scan` — PII exposure findings trigger automatic anonymisation scan
+  3. `react_cert_expiry_check` — certificate expiry findings trigger compliance audit re-run
+  4. `react_timeout_escalation` — timeout events trigger escalation with SLA context
+  5. `react_remediation_verification` — remediation completion triggers verification workflow
+  6. `react_audit_summary` — audit completion triggers summary report generation
+  7. `react_mttr_baseline` — new finding creation triggers MTTR baseline establishment
+- **Conditional execution** — each rule evaluates event type, severity, risk category, and payload fields before firing
+- **Toggle API** — `PUT /api/v1/reactions/rules/{rule_id}/toggle` enables or disables individual rules at runtime
+- **Statistics endpoint** — `GET /api/v1/reactions/stats` returns enabled count, total actions executed, and per-rule action counts
+- **Reaction log** — `GET /api/v1/reactions/log` shows recent reaction activity with full context
+
+### 8. API Gateway + Dashboard (Python FastAPI)
+
+- **45 REST routes** covering all tools, state machine, event bus, reactions, and shared queries
+- **Frontend status endpoint** — `GET /api/v1/system/frontend-status` tests 10 backend services (database, state machine, event bus, reaction engine, anonymiser, NER detector, auditor, remediation, MTTR tracker, end-to-end event flow) and returns operational/degraded status
+- **Connectivity diagnostic** — `GET /api/v1/system/connectivity` provides per-component latency, status, and detail for all 10 components
+- **State machine ↔ Event Bus bridge** — callback on every successful transition auto-publishes `FINDING_STATE_CHANGED` event with full transition context
+- **State machine ↔ Go MTTR bridge** — async HTTP POST forwards transitions to Go service at `/api/v1/events/sm`
+- **Static HTML dashboard** — interactive dark-theme UI with 10 tabs (Tools, Backend Status, Connectivity, Anonymiser, Auditor, Remediation, MTTR Tracker, Findings, State Machine, Event Bus)
+- **Backend Status panel** — visual grid showing live status of all 10 backend services, auto-refreshes on tab selection
+- **Python Client SDK** — typed `httpx` client with Pydantic models for programmatic integration
 - **OpenAPI documentation** — auto-generated Swagger UI at `/docs` and ReDoc at `/redoc`
 - **CORS middleware** — configured for cross-origin frontend access
 - **MTTR proxy** — transparently proxies MTTR requests to the Golang service
@@ -190,7 +233,7 @@ The swarm is designed to ingest marine weather data and use it as a first-class 
 
 ## Database Schema
 
-6 SQLAlchemy ORM tables:
+8 SQLAlchemy ORM tables:
 
 1. `anonymisation_records` — audit trail for every PII field anonymised
 2. `masking_policies` — field-level masking rules with GDPR article references
@@ -198,9 +241,12 @@ The swarm is designed to ingest marine weather data and use it as a first-class 
 4. `edi_connection_profiles` — partner EDI connection configurations
 5. `mttr_events` — telemetry events tracking finding lifecycle phases
 6. `compliance_reports` — periodic compliance summary reports
+7. `finding_transitions` — complete audit trail of every state machine transition (from_state, to_state, trigger, actor, context_payload, auto_escalated, timeout_hours)
+8. `event_log` — immutable event store for all system events (event_type, source, correlation_id, payload, created_at)
 
 7 Enum types:
 
+- `FindingState` — detected, triaged, assigned, in_remediation, awaiting_verification, verified, closed, escalated, risk_accepted, false_positive
 - `PIIFieldCategory` — consignee_identity, shipper_identity, contact_info, financial_id, government_id, location
 - `AuditSeverity` — critical, high, medium, low, info
 - `AuditStatus` — open, in_progress, remediated, accepted_risk, false_positive
@@ -216,21 +262,42 @@ The swarm is designed to ingest marine weather data and use it as a first-class 
 |--------|------|------|
 | GET | `/` | Dashboard (HTML) |
 | GET | `/health` | Health check |
+| GET | `/api/v1/system/frontend-status` | Backend Status (10-service check) |
+| GET | `/api/v1/system/connectivity` | Connectivity Diagnostic |
 | POST | `/api/v1/anonymise/manifest` | Anonymiser |
 | POST | `/api/v1/anonymise/free-text` | Anonymiser |
 | POST | `/api/v1/anonymise/scan` | Anonymiser |
+| POST | `/api/v1/anonymise/ner/scan` | NER Detector |
+| POST | `/api/v1/anonymise/ner/anonymise` | NER Anonymiser |
 | POST | `/api/v1/audit/run` | Auditor |
 | GET | `/api/v1/audit/profiles` | Auditor |
 | GET | `/api/v1/audit/queries` | Auditor |
+| GET | `/api/v1/audit/registry/queries` | Query Registry |
+| POST | `/api/v1/audit/registry/queries` | Query Registry |
+| PUT | `/api/v1/audit/registry/queries/{id}` | Query Registry |
+| DELETE | `/api/v1/audit/registry/queries/{id}` | Query Registry |
 | POST | `/api/v1/remediation/policies` | Remediation |
 | POST | `/api/v1/remediation/edi-profiles` | Remediation |
 | POST | `/api/v1/mttr/events` | MTTR (Go) |
+| POST | `/api/v1/events/sm` | MTTR SM Bridge (Go) |
 | GET | `/api/v1/mttr/findings/{id}` | MTTR (Go) |
 | GET | `/api/v1/mttr/report` | MTTR (Go) |
 | GET | `/api/v1/mttr/open` | MTTR (Go) |
 | GET | `/api/v1/findings` | Shared |
 | GET | `/api/v1/policies` | Shared |
 | GET | `/api/v1/reports` | Shared |
+| GET | `/api/v1/state-machine/definition` | State Machine |
+| GET | `/api/v1/state-machine/transitions/{id}/available` | State Machine |
+| POST | `/api/v1/state-machine/transitions/{id}` | State Machine |
+| GET | `/api/v1/state-machine/transitions/{id}/timeline` | State Machine |
+| POST | `/api/v1/state-machine/timeout-check` | State Machine |
+| GET | `/api/v1/events/stats` | Event Bus |
+| GET | `/api/v1/events` | Event Bus |
+| POST | `/api/v1/events/publish` | Event Bus |
+| GET | `/api/v1/reactions/rules` | Reactions |
+| GET | `/api/v1/reactions/stats` | Reactions |
+| GET | `/api/v1/reactions/log` | Reactions |
+| PUT | `/api/v1/reactions/rules/{id}/toggle` | Reactions |
 | GET | `/docs` | Swagger UI |
 | GET | `/redoc` | ReDoc |
 
@@ -244,6 +311,9 @@ The swarm is designed to ingest marine weather data and use it as a first-class 
 | PII Anonymiser | Python, cryptography (HMAC-SHA256, Fernet) | 3.12+ |
 | EDI Auditor | Python, SQLAlchemy 2.0 | 3.12+ |
 | Remediation | Python, SQLAlchemy 2.0 | 3.12+ |
+| State Machine | Python, shared/state_machine.py | 3.12+ |
+| Event Bus | Python, shared/event_bus.py | 3.12+ |
+| Reaction Engine | Python, shared/reactions.py | 3.12+ |
 | MTTR Tracker | Golang, net/http, database/sql | 1.22+ |
 | Database (dev) | SQLite with WAL mode | — |
 | Database (prod) | PostgreSQL 16 + PostGIS 3.4 | — |
