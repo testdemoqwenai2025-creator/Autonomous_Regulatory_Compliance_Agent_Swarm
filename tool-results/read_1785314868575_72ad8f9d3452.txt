@@ -1,0 +1,750 @@
+     1→#!/usr/bin/env python3
+     2→"""
+     3→Add placeholder entries to Table of Contents in a DOCX file.
+     4→
+     5→This script adds placeholder TOC entries between the 'separate' and 'end'
+     6→field characters, so users see some content on first open instead of an empty TOC.
+     7→The original file is replaced with the modified version.
+     8→
+     9→Usage:
+    10→    python add_toc_placeholders.py <docx_file>              # auto-extract headings (default)
+    11→    python add_toc_placeholders.py <docx_file> --auto       # explicit auto mode
+    12→    python add_toc_placeholders.py <docx_file> --entries <entries_json>
+    13→
+    14→    entries_json format: JSON string with array of objects:
+    15→    [
+    16→        {"level": 1, "text": "Chapter 1 Overview", "page": "1"},
+    17→        {"level": 2, "text": "Section 1.1 Details", "page": "1"}
+    18→    ]
+    19→
+    20→    Default behavior (no flags): auto-extracts Heading 1-3 from the document.
+    21→    Filters out table/figure captions (e.g. "表 1：xxx", "图 2：xxx").
+    22→
+    23→Example:
+    24→    python add_toc_placeholders.py document.docx
+    25→    python add_toc_placeholders.py document.docx --auto
+    26→    python add_toc_placeholders.py document.docx --entries '[{"level":1,"text":"Introduction","page":"1"}]'
+    27→"""
+    28→
+    29→import argparse
+    30→import html
+    31→import json
+    32→import re
+    33→import shutil
+    34→import sys
+    35→import tempfile
+    36→import zipfile
+    37→from pathlib import Path
+    38→
+    39→
+    40→def _extract_headings_from_docx(docx_path: str, max_level: int = 3) -> list:
+    41→    """Extract headings from a DOCX file for auto-mode TOC generation.
+    42→
+    43→    Args:
+    44→        docx_path: Path to DOCX file
+    45→        max_level: Maximum heading level to include (default 3)
+    46→
+    47→    Returns:
+    48→        List of dicts with 'level', 'text', 'page' keys
+    49→    """
+    50→    from docx import Document
+    51→
+    52→    doc = Document(docx_path)
+    53→    entries = []
+    54→    page_estimate = 1
+    55→
+    56→    # Pattern to filter out table/figure captions styled as headings
+    57→    caption_pattern = re.compile(r'^[表图]\s*\d')
+    58→
+    59→    for i, para in enumerate(doc.paragraphs):
+    60→        style_name = para.style.name if para.style else ''
+    61→        if not style_name.startswith('Heading'):
+    62→            continue
+    63→        m = re.search(r'(\d+)', style_name)
+    64→        if not m:
+    65→            continue
+    66→        level = int(m.group(1))
+    67→        if level > max_level:
+    68→            continue
+    69→        text = para.text.strip()
+    70→        if not text:
+    71→            continue
+    72→        # Filter table/figure captions
+    73→        if caption_pattern.match(text):
+    74→            continue
+    75→
+    76→        # Rough page estimate: increment every ~8 headings
+    77→        page_estimate = max(1, 1 + i // 8)
+    78→        entries.append({"level": level, "text": text, "page": str(page_estimate)})
+    79→
+    80→    return entries
+    81→
+    82→
+    83→def add_toc_placeholders(docx_path: str, entries: list = None) -> None:
+    84→    """Add placeholder TOC entries to a DOCX file (in-place replacement).
+    85→
+    86→    Args:
+    87→        docx_path: Path to DOCX file (will be modified in-place)
+    88→        entries: Optional list of placeholder entries. Each entry should be a dict
+    89→                 with 'level' (1-3), 'text', and 'page' keys.
+    90→    """
+    91→    docx_path = Path(docx_path)
+    92→
+    93→    # Create temp directory for extraction
+    94→    with tempfile.TemporaryDirectory() as temp_dir:
+    95→        temp_path = Path(temp_dir)
+    96→        extracted_dir = temp_path / "extracted"
+    97→        temp_output = temp_path / "output.docx"
+    98→
+    99→        # Extract DOCX
+   100→        with zipfile.ZipFile(docx_path, 'r') as zip_ref:
+   101→            zip_ref.extractall(extracted_dir)
+   102→
+   103→        # Ensure TOC styles exist in styles.xml
+   104→        styles_xml_path = extracted_dir / "word" / "styles.xml"
+   105→        toc_style_mapping = _ensure_toc_styles(styles_xml_path)
+   106→        print(f"TOC style mapping: {toc_style_mapping}")
+   107→
+   108→        # Fix settings.xml: ensure updateFields has val="true"
+   109→        settings_xml_path = extracted_dir / "word" / "settings.xml"
+   110→        _fix_update_fields(settings_xml_path)
+   111→
+   112→        # Fix Heading styles: ensure outlineLvl is set (required for TOC field update)
+   113→        _fix_heading_outline_levels(styles_xml_path)
+   114→
+   115→        # Process document.xml
+   116→        document_xml = extracted_dir / "word" / "document.xml"
+   117→        if not document_xml.exists():
+   118→            raise ValueError("document.xml not found in the DOCX file")
+   119→
+   120→        # Read and process XML
+   121→        content = document_xml.read_text(encoding='utf-8')
+   122→
+   123→        # Fix fldChar structure: split merged begin+instrText+separate into separate <w:r> elements
+   124→        content = _fix_fld_char_structure(content)
+   125→
+   126→        # Find TOC structure and add placeholders (uses lxml for robust XML parsing)
+   127→        modified_content = _insert_toc_placeholders(content, entries, toc_style_mapping)
+   128→
+   129→        # Write back
+   130→        document_xml.write_text(modified_content, encoding='utf-8')
+   131→
+   132→        # Repack DOCX to temp file
+   133→        with zipfile.ZipFile(temp_output, 'w', zipfile.ZIP_DEFLATED) as zipf:
+   134→            for file_path in extracted_dir.rglob('*'):
+   135→                if file_path.is_file():
+   136→                    arcname = file_path.relative_to(extracted_dir)
+   137→                    zipf.write(file_path, arcname)
+   138→
+   139→        # Replace original file with modified version (use shutil.move for cross-device support)
+   140→        docx_path.unlink()
+   141→        shutil.move(str(temp_output), str(docx_path))
+   142→
+   143→
+   144→def _fix_update_fields(settings_xml_path: Path) -> None:
+   145→    """Fix settings.xml to ensure <w:updateFields w:val="true"/> is present.
+   146→
+   147→    The docx npm library generates <w:updateFields/> without val="true",
+   148→    which Word/WPS interprets as false, preventing TOC auto-update on open.
+   149→    """
+   150→    if not settings_xml_path.exists():
+   151→        return
+   152→
+   153→    content = settings_xml_path.read_text(encoding='utf-8')
+   154→    original = content
+   155→
+   156→    # Case 1: <w:updateFields/> (self-closing, no val) → add val="true"
+   157→    if '<w:updateFields/>' in content:
+   158→        content = content.replace('<w:updateFields/>', '<w:updateFields w:val="true"/>')
+   159→        print('Fixed: <w:updateFields/> → <w:updateFields w:val="true"/>')
+   160→
+   161→    # Case 2: <w:updateFields w:val="false"/> → change to true (match precisely)
+   162→    elif re.search(r'<w:updateFields\s+w:val="false"\s*/>', content):
+   163→        content = re.sub(
+   164→            r'<w:updateFields\s+w:val="false"\s*/>',
+   165→            '<w:updateFields w:val="true"/>',
+   166→            content
+   167→        )
+   168→        print('Fixed: <w:updateFields w:val="false"/> → <w:updateFields w:val="true"/>')
+   169→
+   170→    # Case 3: Not present at all → inject before </w:settings>
+   171→    elif '<w:updateFields' not in content:
+   172→        content = content.replace('</w:settings>', '<w:updateFields w:val="true"/></w:settings>')
+   173→        print('Fixed: added <w:updateFields w:val="true"/> to settings.xml')
+   174→
+   175→    if content != original:
+   176→        settings_xml_path.write_text(content, encoding='utf-8')
+   177→
+   178→
+   179→def _fix_heading_outline_levels(styles_xml_path: Path) -> None:
+   180→    """Fix Heading styles to include outlineLvl in pPr.
+   181→
+   182→    The docx npm library creates Heading styles but sometimes doesn't set outlineLvl
+   183→    in the style definition. Without outlineLvl, Word's TOC field update won't find
+   184→    headings even though they display correctly.
+   185→
+   186→    This ensures Heading1 has outlineLvl=0, Heading2 has outlineLvl=1, etc.
+   187→    """
+   188→    if not styles_xml_path.exists():
+   189→        return
+   190→
+   191→    content = styles_xml_path.read_text(encoding='utf-8')
+   192→    original = content
+   193→
+   194→    W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+   195→
+   196→    for level in range(1, 7):
+   197→        style_id = f'Heading{level}'
+   198→        outline_val = str(level - 1)
+   199→
+   200→        # Pattern: find <w:style> with w:styleId="HeadingN"
+   201→        style_pattern = (
+   202→            rf'(<w:style[^>]*w:styleId="{style_id}"[^>]*>)'
+   203→            rf'(.*?)'
+   204→            rf'(</w:style>)'
+   205→        )
+   206→
+   207→        match = re.search(style_pattern, content, flags=re.DOTALL)
+   208→        if not match:
+   209→            continue
+   210→
+   211→        style_content = match.group(2)
+   212→
+   213→        # Check if outlineLvl already exists in this style
+   214→        if f'<w:outlineLvl' in style_content:
+   215→            continue
+   216→
+   217→        # Find or create <w:pPr> within this style
+   218→        ppr_match = re.search(r'(<w:pPr[^>]*>)(.*?)(</w:pPr>)', style_content, flags=re.DOTALL)
+   219→        if ppr_match:
+   220→            # Add outlineLvl inside existing pPr
+   221→            new_ppr_content = ppr_match.group(2) + f'<w:outlineLvl w:val="{outline_val}"/>'
+   222→            new_style_content = (
+   223→                style_content[:ppr_match.start()] +
+   224→                ppr_match.group(1) + new_ppr_content + ppr_match.group(3) +
+   225→                style_content[ppr_match.end():]
+   226→            )
+   227→        else:
+   228→            # No pPr exists, create one
+   229→            new_ppr = f'<w:pPr><w:outlineLvl w:val="{outline_val}"/></w:pPr>'
+   230→            # Insert pPr right after style opening (after name/basedOn if present)
+   231→            new_style_content = new_ppr + style_content
+   232→
+   233→        new_style = match.group(1) + new_style_content + match.group(3)
+   234→        content = content[:match.start()] + new_style + content[match.end():]
+   235→        print(f'Fixed: added outlineLvl={outline_val} to {style_id} style')
+   236→
+   237→    if content != original:
+   238→        styles_xml_path.write_text(content, encoding='utf-8')
+   239→
+   240→
+   241→def _fix_fld_char_structure(xml_content: str) -> str:
+   242→    """Fix malformed fldChar structure where begin+instrText+separate are in one <w:r>.
+   243→
+   244→    The docx npm library generates:
+   245→        <w:r><w:fldChar begin/><w:instrText>TOC...</w:instrText><w:fldChar separate/></w:r>
+   246→
+   247→    Word/WPS requires the standard structure:
+   248→        <w:r><w:fldChar begin/></w:r>
+   249→        <w:r><w:instrText>TOC...</w:instrText></w:r>
+   250→        <w:r><w:fldChar separate/></w:r>
+   251→    """
+   252→    # Match a <w:r> that contains both begin fldChar AND instrText AND separate fldChar
+   253→    pattern = (
+   254→        r'<w:r(?:\s[^>]*)?>('
+   255→        r'<w:fldChar[^>]*w:fldCharType="begin"[^>]*/>'  # begin
+   256→        r')('
+   257→        r'<w:instrText[^>]*>.*?</w:instrText>'           # instrText  
+   258→        r')('
+   259→        r'<w:fldChar[^>]*w:fldCharType="separate"[^>]*/>'  # separate
+   260→        r')</w:r>'
+   261→    )
+   262→
+   263→    def split_run(match):
+   264→        begin = match.group(1)
+   265→        instr = match.group(2)
+   266→        separate = match.group(3)
+   267→        return f'<w:r>{begin}</w:r><w:r>{instr}</w:r><w:r>{separate}</w:r>'
+   268→
+   269→    modified = re.sub(pattern, split_run, xml_content, flags=re.DOTALL)
+   270→    if modified != xml_content:
+   271→        print("Fixed: split merged fldChar begin+instrText+separate into separate <w:r> elements")
+   272→
+   273→    # Fix TOC instrText: remove \t switch with wrong style names
+   274→    # docx npm lib generates \t "Heading1,1,Heading2,2,..." but Word expects "Heading 1,1,..."
+   275→    # Since we already have \o "1-3" which uses outlineLvl (now fixed), \t is redundant and harmful
+   276→    toc_t_pattern = r'(TOC\s+[^<]*?)\\t\s+&quot;[^&]*&quot;'
+   277→    modified2 = re.sub(toc_t_pattern, r'\1', modified)
+   278→    if modified2 != modified:
+   279→        print("Fixed: removed \\t switch from TOC instrText (\\o with outlineLvl is sufficient)")
+   280→        modified = modified2
+   281→
+   282→    return modified
+   283→
+   284→
+   285→def _detect_toc_styles(styles_xml_path: Path) -> dict:
+   286→    """Detect TOC style IDs from styles.xml.
+   287→
+   288→    Args:
+   289→        styles_xml_path: Path to styles.xml
+   290→
+   291→    Returns:
+   292→        Dictionary mapping level (1-3) to style ID string
+   293→    """
+   294→    if not styles_xml_path.exists():
+   295→        return {}
+   296→
+   297→    content = styles_xml_path.read_text(encoding='utf-8')
+   298→    result = {}
+   299→
+   300→    for level in range(1, 4):
+   301→        # Standard TOC style names: "TOC 1", "TOC 2", "TOC 3" (with space)
+   302→        # or "TOC1", "TOC2", "TOC3" (no space) — docx-js uses numeric IDs like "9", "11", "12"
+   303→        patterns = [
+   304→            rf'w:styleId="(TOC{level})"',
+   305→            rf'w:styleId="(TOC {level})"',
+   306→            rf'<w:name\s+w:val="toc\s*{level}"[^/]*/>\s*</w:name>|<w:name\s+w:val="toc\s*{level}"[^/]*/>',
+   307→        ]
+   308→        for pattern in patterns[:2]:
+   309→            m = re.search(pattern, content)
+   310→            if m:
+   311→                result[level] = m.group(1)
+   312→                break
+   313→        else:
+   314→            # Try matching by w:name (case insensitive toc N)
+   315→            # Find <w:style> blocks with name containing "toc N"
+   316→            name_pattern = rf'<w:style[^>]*w:styleId="([^"]*)"[^>]*>.*?<w:name\s+w:val="[Tt][Oo][Cc]\s*{level}"'
+   317→            m = re.search(name_pattern, content, flags=re.DOTALL)
+   318→            if m:
+   319→                result[level] = m.group(1)
+   320→
+   321→    return result
+   322→
+   323→
+   324→def _ensure_toc_styles(styles_xml_path: Path) -> dict:
+   325→    """Ensure TOC styles exist in styles.xml, adding them if necessary.
+   326→
+   327→    Returns:
+   328→        Dictionary mapping level (1-3) to style ID string
+   329→    """
+   330→    if not styles_xml_path.exists():
+   331→        return {1: "9", 2: "11", 3: "12"}
+   332→
+   333→    content = styles_xml_path.read_text(encoding='utf-8')
+   334→    detected = _detect_toc_styles(styles_xml_path)
+   335→    result = dict(detected)
+   336→
+   337→    W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+   338→
+   339→    # Define TOC styles to add if missing
+   340→    toc_style_defs = {
+   341→        1: {
+   342→            'id': '9',
+   343→            'name': 'toc 1',
+   344→            'xml': f'''<w:style w:type="paragraph" w:styleId="9" xmlns:w="{W_NS}">
+   345→  <w:name w:val="toc 1"/>
+   346→  <w:basedOn w:val="Normal"/>
+   347→  <w:uiPriority w:val="39"/>
+   348→  <w:pPr>
+   349→    <w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9026"/></w:tabs>
+   350→    <w:spacing w:before="120" w:after="60"/>
+   351→  </w:pPr>
+   352→  <w:rPr><w:b/><w:bCs/></w:rPr>
+   353→</w:style>'''
+   354→        },
+   355→        2: {
+   356→            'id': '11',
+   357→            'name': 'toc 2',
+   358→            'xml': f'''<w:style w:type="paragraph" w:styleId="11" xmlns:w="{W_NS}">
+   359→  <w:name w:val="toc 2"/>
+   360→  <w:basedOn w:val="Normal"/>
+   361→  <w:uiPriority w:val="39"/>
+   362→  <w:pPr>
+   363→    <w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9026"/></w:tabs>
+   364→    <w:ind w:left="360"/>
+   365→    <w:spacing w:before="60" w:after="40"/>
+   366→  </w:pPr>
+   367→</w:style>'''
+   368→        },
+   369→        3: {
+   370→            'id': '12',
+   371→            'name': 'toc 3',
+   372→            'xml': f'''<w:style w:type="paragraph" w:styleId="12" xmlns:w="{W_NS}">
+   373→  <w:name w:val="toc 3"/>
+   374→  <w:basedOn w:val="Normal"/>
+   375→  <w:uiPriority w:val="39"/>
+   376→  <w:pPr>
+   377→    <w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9026"/></w:tabs>
+   378→    <w:ind w:left="720"/>
+   379→    <w:spacing w:before="40" w:after="20"/>
+   380→  </w:pPr>
+   381→</w:style>'''
+   382→        },
+   383→    }
+   384→
+   385→    modified = False
+   386→    for level in range(1, 4):
+   387→        if level not in result:
+   388→            style_def = toc_style_defs[level]
+   389→            result[level] = style_def['id']
+   390→            # Add style before </w:styles>
+   391→            insert_point = content.rfind('</w:styles>')
+   392→            if insert_point == -1:
+   393→                print(f"WARNING: Could not find </w:styles> to insert TOC {level} style", file=sys.stderr)
+   394→                continue
+   395→            content = content[:insert_point] + style_def['xml'] + '\n' + content[insert_point:]
+   396→            print(f"Added TOC {level} style (ID: {style_def['id']})")
+   397→            modified = True
+   398→
+   399→    if modified:
+   400→        styles_xml_path.write_text(content, encoding='utf-8')
+   401→
+   402→    # Ensure Hyperlink style exists
+   403→    _ensure_hyperlink_style(styles_xml_path)
+   404→
+   405→    return result
+   406→
+   407→
+   408→def _ensure_hyperlink_style(styles_xml_path: Path) -> None:
+   409→    """Ensure Hyperlink character style exists in styles.xml."""
+   410→    if not styles_xml_path.exists():
+   411→        return
+   412→
+   413→    content = styles_xml_path.read_text(encoding='utf-8')
+   414→    if 'w:styleId="Hyperlink"' in content:
+   415→        return
+   416→
+   417→    W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+   418→    hyperlink_style = f'''<w:style w:type="character" w:styleId="Hyperlink" xmlns:w="{W_NS}">
+   419→  <w:name w:val="Hyperlink"/>
+   420→  <w:uiPriority w:val="99"/>
+   421→  <w:rPr>
+   422→    <w:color w:val="0563C1"/>
+   423→    <w:u w:val="single"/>
+   424→  </w:rPr>
+   425→</w:style>'''
+   426→
+   427→    insert_point = content.rfind('</w:styles>')
+   428→    if insert_point != -1:
+   429→        content = content[:insert_point] + hyperlink_style + '\n' + content[insert_point:]
+   430→        styles_xml_path.write_text(content, encoding='utf-8')
+   431→        print("Added Hyperlink character style")
+   432→
+   433→
+   434→def _insert_toc_placeholders(xml_content: str, entries: list = None, toc_style_mapping: dict = None) -> str:
+   435→    """Insert placeholder TOC entries and heading bookmarks into XML content.
+   436→
+   437→    Uses lxml ElementTree for robust XML manipulation instead of fragile regex.
+   438→
+   439→    This function does TWO things:
+   440→    1. Adds bookmark anchors to each Heading paragraph (so Word can link TOC → heading)
+   441→    2. Replaces TOC placeholder area with proper entries containing HYPERLINK + PAGEREF
+   442→
+   443→    Args:
+   444→        xml_content: The XML content of document.xml
+   445→        entries: List of placeholder entries with 'level', 'text', 'page' keys
+   446→        toc_style_mapping: Dictionary mapping level to style ID
+   447→
+   448→    Returns:
+   449→        Modified XML content with bookmarks and TOC placeholders
+   450→
+   451→    Raises:
+   452→        RuntimeError: If TOC structure cannot be found or is malformed
+   453→    """
+   454→    from lxml import etree
+   455→
+   456→    if entries is None:
+   457→        entries = [{"level": 1, "text": "Contents", "page": "1"}]
+   458→
+   459→    if toc_style_mapping is None:
+   460→        toc_style_mapping = {1: "9", 2: "11", 3: "12"}
+   461→
+   462→    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+   463→    R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+   464→
+   465→    # Parse XML
+   466→    root = etree.fromstring(xml_content.encode('utf-8'))
+   467→    nsmap = {'w': W, 'r': R_NS}
+   468→
+   469→    # ── Step 1: Add bookmarks to Heading paragraphs ──
+   470→    bookmark_id_counter = 100000
+   471→    heading_bookmark_map = {}  # text → first bookmark_name (backward compat)
+   472→    heading_bookmark_map_all = {}  # text → [list of bookmark_names] for duplicate headings
+   473→
+   474→    for para in root.iter(f'{{{W}}}p'):
+   475→        # Find pStyle
+   476→        ppr = para.find(f'{{{W}}}pPr')
+   477→        if ppr is None:
+   478→            continue
+   479→        pstyle = ppr.find(f'{{{W}}}pStyle')
+   480→        if pstyle is None:
+   481→            continue
+   482→        style_val = pstyle.get(f'{{{W}}}val', '')
+   483→        if not re.match(r'Heading\d$', style_val):
+   484→            continue
+   485→
+   486→        # Extract heading text
+   487→        texts = []
+   488→        for t_elem in para.iter(f'{{{W}}}t'):
+   489→            if t_elem.text:
+   490→                texts.append(t_elem.text)
+   491→        heading_text = ''.join(texts).strip()
+   492→        if not heading_text:
+   493→            continue
+   494→
+   495→        # Skip if already has bookmark
+   496→        if para.find(f'{{{W}}}bookmarkStart') is not None:
+   497→            continue
+   498→
+   499→        # Generate bookmark
+   500→        bm_name = f"_Toc{bookmark_id_counter}"
+   501→        bm_id_str = str(bookmark_id_counter)
+   502→        bookmark_id_counter += 1
+   503→
+   504→        # Store mapping (support duplicate headings)
+   505→        if heading_text not in heading_bookmark_map_all:
+   506→            heading_bookmark_map_all[heading_text] = []
+   507→        heading_bookmark_map_all[heading_text].append(bm_name)
+   508→        if heading_text not in heading_bookmark_map:
+   509→            heading_bookmark_map[heading_text] = bm_name
+   510→
+   511→        # Insert bookmarkStart after pPr
+   512→        bm_start = etree.Element(f'{{{W}}}bookmarkStart')
+   513→        bm_start.set(f'{{{W}}}id', bm_id_str)
+   514→        bm_start.set(f'{{{W}}}name', bm_name)
+   515→
+   516→        bm_end = etree.Element(f'{{{W}}}bookmarkEnd')
+   517→        bm_end.set(f'{{{W}}}id', bm_id_str)
+   518→
+   519→        ppr_index = list(para).index(ppr)
+   520→        para.insert(ppr_index + 1, bm_start)
+   521→        # bookmarkEnd at end of paragraph
+   522→        para.append(bm_end)
+   523→
+   524→    bookmarks_added = len(heading_bookmark_map)
+   525→    if bookmarks_added > 0:
+   526→        print(f"Added {bookmarks_added} bookmarks to Heading paragraphs")
+   527→
+   528→    # ── Step 2: Find TOC field structure (begin → instrText → separate → end) ──
+   529→    toc_separate_para = None
+   530→    toc_end_para = None
+   531→
+   532→    # Track field nesting to handle nested fields correctly
+   533→    field_stack = []
+   534→    toc_field_depth = None
+   535→
+   536→    for fld_char in root.iter(f'{{{W}}}fldChar'):
+   537→        fld_type = fld_char.get(f'{{{W}}}fldCharType')
+   538→        run = fld_char.getparent()
+   539→
+   540→        if fld_type == 'begin':
+   541→            para = run.getparent()
+   542→            instr_text = ''
+   543→            found_run = False
+   544→            for sibling in para:
+   545→                if sibling is run:
+   546→                    found_run = True
+   547→                    it = sibling.find(f'{{{W}}}instrText')
+   548→                    if it is not None and it.text:
+   549→                        instr_text += it.text
+   550→                    continue
+   551→                if found_run and sibling.tag == f'{{{W}}}r':
+   552→                    it = sibling.find(f'{{{W}}}instrText')
+   553→                    if it is not None and it.text:
+   554→                        instr_text += it.text
+   555→                    if sibling.find(f'{{{W}}}fldChar') is not None:
+   556→                        break
+   557→
+   558→            field_stack.append(instr_text.strip())
+   559→            if 'TOC' in instr_text and toc_field_depth is None:
+   560→                toc_field_depth = len(field_stack)
+   561→
+   562→        elif fld_type == 'separate':
+   563→            if toc_field_depth is not None and len(field_stack) == toc_field_depth:
+   564→                toc_separate_para = run.getparent()
+   565→
+   566→        elif fld_type == 'end':
+   567→            if toc_field_depth is not None and len(field_stack) == toc_field_depth:
+   568→                toc_end_para = run.getparent()
+   569→                break
+   570→            if field_stack:
+   571→                field_stack.pop()
+   572→
+   573→    if toc_separate_para is None or toc_end_para is None:
+   574→        has_begin = root.find(f'.//{{{W}}}fldChar[@{{{W}}}fldCharType="begin"]') is not None
+   575→        has_separate = root.find(f'.//{{{W}}}fldChar[@{{{W}}}fldCharType="separate"]') is not None
+   576→        if not has_begin:
+   577→            raise RuntimeError(
+   578→                "TOC FAILED: No field structure found in document. "
+   579→                "Ensure the code includes a TableOfContents element."
+   580→            )
+   581→        elif not has_separate:
+   582→            raise RuntimeError(
+   583→                "TOC FAILED: TOC field has 'begin' but no 'separate' fldChar. "
+   584→                "Run _fix_fld_char_structure() first or check the docx-js version."
+   585→            )
+   586→        else:
+   587→            raise RuntimeError(
+   588→                "TOC FAILED: Field structure found but no TOC instrText detected. "
+   589→                "Ensure TableOfContents element generates a TOC \\o field code."
+   590→            )
+   591→
+   592→    # ── Step 3: Remove everything between separate-para and end-para ──
+   593→    # The TOC paragraphs may be direct children of <w:body> or wrapped in <w:sdt><w:sdtContent>
+   594→    toc_container = toc_separate_para.getparent()  # could be body or sdtContent
+   595→    container_children = list(toc_container)
+   596→
+   597→    sep_idx = container_children.index(toc_separate_para)
+   598→    end_idx = container_children.index(toc_end_para)
+   599→
+   600→    for elem in container_children[sep_idx + 1:end_idx]:
+   601→        toc_container.remove(elem)
+   602→
+   603→    # ── Step 4: Build and insert placeholder paragraphs ──
+   604→    indent_mapping = {1: 0, 2: 360, 3: 720, 4: 1080, 5: 1440, 6: 1800}
+   605→    heading_occurrence_counter = {}
+   606→
+   607→    insert_pos = list(toc_container).index(toc_end_para)
+   608→
+   609→    for entry in entries:
+   610→        level = entry.get('level', 1)
+   611→        text_raw = entry.get('text', '')
+   612→        page = entry.get('page', '1')
+   613→
+   614→        toc_style = toc_style_mapping.get(level, toc_style_mapping.get(1, "9"))
+   615→        indent = indent_mapping.get(level, 0)
+   616→
+   617→        # Resolve bookmark (handle duplicate headings correctly)
+   618→        bm_name = ''
+   619→        if text_raw in heading_bookmark_map_all:
+   620→            occ = heading_occurrence_counter.get(text_raw, 0)
+   621→            bm_list = heading_bookmark_map_all[text_raw]
+   622→            if occ < len(bm_list):
+   623→                bm_name = bm_list[occ]
+   624→            heading_occurrence_counter[text_raw] = occ + 1
+   625→
+   626→        # Build paragraph element
+   627→        p = etree.Element(f'{{{W}}}p')
+   628→        toc_container.insert(insert_pos, p)
+   629→        insert_pos += 1
+   630→
+   631→        # pPr
+   632→        ppr = etree.SubElement(p, f'{{{W}}}pPr')
+   633→        pstyle = etree.SubElement(ppr, f'{{{W}}}pStyle')
+   634→        pstyle.set(f'{{{W}}}val', str(toc_style))
+   635→        if indent > 0:
+   636→            ind = etree.SubElement(ppr, f'{{{W}}}ind')
+   637→            ind.set(f'{{{W}}}left', str(indent))
+   638→        tabs = etree.SubElement(ppr, f'{{{W}}}tabs')
+   639→        tab = etree.SubElement(tabs, f'{{{W}}}tab')
+   640→        tab.set(f'{{{W}}}val', 'right')
+   641→        tab.set(f'{{{W}}}leader', 'dot')
+   642→        tab.set(f'{{{W}}}pos', '9026')
+   643→        spacing = etree.SubElement(ppr, f'{{{W}}}spacing')
+   644→        spacing.set(f'{{{W}}}before', '120')
+   645→        spacing.set(f'{{{W}}}after', '60')
+   646→
+   647→        if bm_name:
+   648→            hyperlink = etree.SubElement(p, f'{{{W}}}hyperlink')
+   649→            hyperlink.set(f'{{{W}}}anchor', bm_name)
+   650→            hyperlink.set(f'{{{W}}}history', '1')
+   651→
+   652→            r_text = etree.SubElement(hyperlink, f'{{{W}}}r')
+   653→            rpr = etree.SubElement(r_text, f'{{{W}}}rPr')
+   654→            rstyle = etree.SubElement(rpr, f'{{{W}}}rStyle')
+   655→            rstyle.set(f'{{{W}}}val', 'Hyperlink')
+   656→            t = etree.SubElement(r_text, f'{{{W}}}t')
+   657→            t.text = text_raw
+   658→
+   659→            r_tab = etree.SubElement(hyperlink, f'{{{W}}}r')
+   660→            etree.SubElement(r_tab, f'{{{W}}}tab')
+   661→
+   662→            r_begin = etree.SubElement(hyperlink, f'{{{W}}}r')
+   663→            fc_begin = etree.SubElement(r_begin, f'{{{W}}}fldChar')
+   664→            fc_begin.set(f'{{{W}}}fldCharType', 'begin')
+   665→
+   666→            r_instr = etree.SubElement(hyperlink, f'{{{W}}}r')
+   667→            instr = etree.SubElement(r_instr, f'{{{W}}}instrText')
+   668→            instr.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+   669→            instr.text = f' PAGEREF {bm_name} \\h '
+   670→
+   671→            r_sep = etree.SubElement(hyperlink, f'{{{W}}}r')
+   672→            fc_sep = etree.SubElement(r_sep, f'{{{W}}}fldChar')
+   673→            fc_sep.set(f'{{{W}}}fldCharType', 'separate')
+   674→
+   675→            r_page = etree.SubElement(hyperlink, f'{{{W}}}r')
+   676→            t_page = etree.SubElement(r_page, f'{{{W}}}t')
+   677→            t_page.text = str(page)
+   678→
+   679→            r_end = etree.SubElement(hyperlink, f'{{{W}}}r')
+   680→            fc_end = etree.SubElement(r_end, f'{{{W}}}fldChar')
+   681→            fc_end.set(f'{{{W}}}fldCharType', 'end')
+   682→        else:
+   683→            r_text = etree.SubElement(p, f'{{{W}}}r')
+   684→            t = etree.SubElement(r_text, f'{{{W}}}t')
+   685→            t.text = text_raw
+   686→
+   687→            r_tab = etree.SubElement(p, f'{{{W}}}r')
+   688→            etree.SubElement(r_tab, f'{{{W}}}tab')
+   689→
+   690→            r_page = etree.SubElement(p, f'{{{W}}}r')
+   691→            t_page = etree.SubElement(r_page, f'{{{W}}}t')
+   692→            t_page.text = str(page)
+   693→
+   694→    placeholders_inserted = len(entries)
+   695→    print(f"Inserted {placeholders_inserted} TOC placeholder entries")
+   696→
+   697→    # Serialize back to string
+   698→    result = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+   699→    return result.decode('utf-8')
+   700→
+   701→
+   702→def main():
+   703→    parser = argparse.ArgumentParser(
+   704→        description='Add placeholder entries to Table of Contents in a DOCX file (in-place)'
+   705→    )
+   706→    parser.add_argument('docx_file', help='DOCX file to modify (will be replaced)')
+   707→    parser.add_argument(
+   708→        '--auto', action='store_true',
+   709→        help='Auto-extract Heading 1-3 from the DOCX as TOC entries (recommended)'
+   710→    )
+   711→    parser.add_argument(
+   712→        '--entries',
+   713→        help='JSON string with placeholder entries: [{"level":1,"text":"Chapter 1","page":"1"}]'
+   714→    )
+   715→
+   716→    args = parser.parse_args()
+   717→
+   718→    # Determine entries
+   719→    entries = None
+   720→    if args.entries:
+   721→        try:
+   722→            entries = json.loads(args.entries)
+   723→        except json.JSONDecodeError as e:
+   724→            print(f"Error parsing entries JSON: {e}", file=sys.stderr)
+   725→            sys.exit(1)
+   726→    elif args.auto or True:
+   727→        # Default to auto mode — always extract from document headings
+   728→        entries = _extract_headings_from_docx(args.docx_file)
+   729→        if entries:
+   730→            print(f"Auto-extracted {len(entries)} headings from document", file=sys.stderr)
+   731→        else:
+   732→            print("No headings found in document, using minimal placeholder", file=sys.stderr)
+   733→            entries = [{"level": 1, "text": "Contents", "page": "1"}]
+   734→
+   735→    # Add placeholders
+   736→    try:
+   737→        add_toc_placeholders(args.docx_file, entries)
+   738→        print(f"Successfully added TOC placeholders to {args.docx_file}")
+   739→    except RuntimeError as e:
+   740→        # TOC structure errors — hard fail with exit code 1
+   741→        print(f"ERROR: {e}", file=sys.stderr)
+   742→        sys.exit(1)
+   743→    except Exception as e:
+   744→        print(f"Error: {e}", file=sys.stderr)
+   745→        sys.exit(1)
+   746→
+   747→
+   748→if __name__ == '__main__':
+   749→    main()
+   750→

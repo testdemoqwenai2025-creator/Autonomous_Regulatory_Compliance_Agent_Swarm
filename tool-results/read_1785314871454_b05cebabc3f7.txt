@@ -1,0 +1,808 @@
+     1→#!/usr/bin/env python3
+     2→"""
+     3→postcheck.py — Document business rule self-check script
+     4→
+     5→Unlike traditional OpenXML Schema validation, this script does not check XML legality.
+     6→Instead, it checks document "visual quality" and "typesetting correctness" — issues visible to the human eye.
+     7→
+     8→Usage:
+     9→  python3 postcheck.py output.docx [--fix] [--json]
+    10→
+    11→Checks:
+    12→  1. Blank page detection — trailing/middle excess blank pages, double page breaks, consecutive empty paragraphs
+    13→  2. Line spacing consistency — whether body paragraph line spacing is uniform
+    14→  3. Table margins — whether cells have padding set
+    15→  4. Table pagination control — whether header rows have tblHeader set, data rows have cantSplit
+    16→  5. Image overflow — whether image width exceeds page usable area
+    17→  6. Font fallback — whether fonts are used that may be missing on target systems
+    18→  7. CJK indentation — whether Chinese body text has first-line indent (excluding table cells, lists, centered paragraphs)
+    19→  8. Heading level continuity — whether headings skip levels (H1→H3 skipping H2)
+    20→  9. Numbering continuity — whether numbered lists have gaps
+    21→  10. Cover separation — whether cover and body are in different sections
+    22→  11. ShadingType — whether SOLID is misused causing black cells
+    23→  12. TOC quality — whether TOC field exists, whether headings use standard Heading styles
+    24→  13. Image aspect ratio — whether images are stretched/distorted
+    25→  14. Document cleanliness — whether placeholder text, Markdown syntax, or draft expressions remain
+    26→  15. Report content quality — whether summary exists, whether titles are specific, whether vague conclusions are used
+    27→"""
+    28→
+    29→import zipfile
+    30→import sys
+    31→import json
+    32→import re
+    33→from pathlib import Path
+    34→from xml.etree import ElementTree as ET
+    35→
+    36→NS = {
+    37→    "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    38→    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    39→    "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+    40→    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    41→    "pic": "http://schemas.openxmlformats.org/drawingml/2006/picture",
+    42→}
+    43→
+    44→
+    45→class CheckResult:
+    46→    def __init__(self, name: str, passed: bool, message: str, severity: str = "warning"):
+    47→        self.name = name
+    48→        self.passed = passed
+    49→        self.message = message
+    50→        self.severity = severity  # "error" | "warning" | "info"
+    51→
+    52→    def to_dict(self):
+    53→        return {
+    54→            "name": self.name,
+    55→            "passed": self.passed,
+    56→            "message": self.message,
+    57→            "severity": self.severity,
+    58→        }
+    59→
+    60→    def __str__(self):
+    61→        icon = "✅" if self.passed else ("❌" if self.severity == "error" else "⚠️")
+    62→        return f"{icon} [{self.name}] {self.message}"
+    63→
+    64→
+    65→def read_document_xml(docx_path: str) -> ET.Element:
+    66→    """Read document.xml and return the root element"""
+    67→    with zipfile.ZipFile(docx_path, "r") as z:
+    68→        return ET.fromstring(z.read("word/document.xml"))
+    69→
+    70→
+    71→def get_sections(root: ET.Element) -> list:
+    72→    """Extract all sections (located via sectPr)"""
+    73→    body = root.find(".//w:body", NS)
+    74→    if body is None:
+    75→        return []
+    76→
+    77→    sections = []
+    78→    current_children = []
+    79→
+    80→    for child in body:
+    81→        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+    82→        if tag == "sectPr":
+    83→            sections.append({"children": current_children, "sectPr": child})
+    84→            current_children = []
+    85→        else:
+    86→            # Check whether paragraph contains sectPr (section break inside paragraph pPr)
+    87→            ppr_sect = child.find(".//w:pPr/w:sectPr", NS)
+    88→            if ppr_sect is not None:
+    89→                current_children.append(child)
+    90→                sections.append({"children": current_children, "sectPr": ppr_sect})
+    91→                current_children = []
+    92→            else:
+    93→                current_children.append(child)
+    94→
+    95→    # Last section (body-level sectPr)
+    96→    body_sect = body.find("w:sectPr", NS)
+    97→    if body_sect is not None and current_children:
+    98→        sections.append({"children": current_children, "sectPr": body_sect})
+    99→
+   100→    return sections
+   101→
+   102→
+   103→def check_blank_pages(root: ET.Element) -> CheckResult:
+   104→    """Detect excess blank pages — multi-pattern detection"""
+   105→    body = root.find(".//w:body", NS)
+   106→    paragraphs = body.findall("w:p", NS)
+   107→    issues = []
+   108→
+   109→    if not paragraphs:
+   110→        return CheckResult("blank-pages", True, "No paragraph content")
+   111→
+   112→    # Check 1: Whether the last paragraph only has a page break
+   113→    last_p = paragraphs[-1]
+   114→    runs = last_p.findall(".//w:r", NS)
+   115→    has_page_break = False
+   116→    has_text = False
+   117→    for run in runs:
+   118→        br = run.find("w:br", NS)
+   119→        if br is not None and br.get(f"{{{NS['w']}}}type") == "page":
+   120→            has_page_break = True
+   121→        t = run.find("w:t", NS)
+   122→        if t is not None and t.text and t.text.strip():
+   123→            has_text = True
+   124→    if has_page_break and not has_text:
+   125→        issues.append("Trailing page break at document end may cause blank page")
+   126→
+   127→    # Check 2: Consecutive empty paragraphs (≥5 consecutive may form visual blank page)
+   128→    consecutive_empty = 0
+   129→    max_empty = 0
+   130→    max_empty_pos = 0
+   131→    for idx, p in enumerate(paragraphs):
+   132→        texts = p.findall(".//w:t", NS)
+   133→        has_any_text = any(t.text and t.text.strip() for t in texts)
+   134→        has_br = any(
+   135→            br.get(f"{{{NS['w']}}}type") == "page"
+   136→            for br in p.findall(".//w:br", NS)
+   137→        )
+   138→        has_drawing = p.find(".//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}inline", None) is not None
+   139→        if not has_any_text and not has_br and not has_drawing:
+   140→            consecutive_empty += 1
+   141→            if consecutive_empty > max_empty:
+   142→                max_empty = consecutive_empty
+   143→                max_empty_pos = idx
+   144→        else:
+   145→            consecutive_empty = 0
+   146→
+   147→    if max_empty >= 5:
+   148→        issues.append(f"Found {max_empty} consecutive empty paragraphs (starting around paragraph {max_empty_pos - max_empty + 2}), may form visual blank page")
+   149→
+   150→    # Check 3: Double page break at section boundary (PageBreak at section end + NEXT_PAGE in next section)
+   151→    sections = get_sections(root)
+   152→    for i in range(len(sections) - 1):
+   153→        sec_children = sections[i]["children"]
+   154→        if not sec_children:
+   155→            continue
+   156→        # Check whether the last paragraph of the section contains PageBreak
+   157→        last_child = sec_children[-1]
+   158→        if last_child.tag == f"{{{NS['w']}}}p":
+   159→            for br in last_child.findall(".//w:br", NS):
+   160→                if br.get(f"{{{NS['w']}}}type") == "page":
+   161→                    # Check whether the next section is NEXT_PAGE
+   162→                    next_sect_pr = sections[i + 1]["sectPr"]
+   163→                    sect_type = next_sect_pr.find("w:type", NS)
+   164→                    if sect_type is not None and sect_type.get(f"{{{NS['w']}}}val") == "nextPage":
+   165→                        issues.append(f"Section {i+1} ends with PageBreak and Section {i+2} is type nextPage, double page break causes blank page")
+   166→
+   167→    # Check 4: Empty paragraph + PageBreak (paragraph has only PageBreak, no text)
+   168→    # Exclude section-ending PageBreaks — they are normal section separators
+   169→    # (e.g., cover page ending with an empty para + PageBreak before a new section)
+   170→    section_last_paras = set()
+   171→    for sec in sections:
+   172→        children = sec["children"]
+   173→        if children:
+   174→            last_child = children[-1]
+   175→            section_last_paras.add(id(last_child))
+   176→
+   177→    empty_pb_count = 0
+   178→    for p in paragraphs[:-1]:  # Last paragraph already handled in Check 1
+   179→        if id(p) in section_last_paras:
+   180→            continue  # Skip section-ending paragraphs (normal section breaks)
+   181→        runs = p.findall(".//w:r", NS)
+   182→        p_has_break = False
+   183→        p_has_text = False
+   184→        for run in runs:
+   185→            br = run.find("w:br", NS)
+   186→            if br is not None and br.get(f"{{{NS['w']}}}type") == "page":
+   187→                p_has_break = True
+   188→            t = run.find("w:t", NS)
+   189→            if t is not None and t.text and t.text.strip():
+   190→                p_has_text = True
+   191→        if p_has_break and not p_has_text:
+   192→            empty_pb_count += 1
+   193→
+   194→    if empty_pb_count > 0:
+   195→        issues.append(f"Found {empty_pb_count} empty paragraphs with PageBreak (suggest attaching PageBreak to content paragraphs)")
+   196→
+   197→    # Separate hard errors from soft warnings
+   198→    hard_issues = [i for i in issues if "double page break" in i.lower() or "trailing page break" in i.lower() or "consecutive" in i.lower()]
+   199→    soft_issues = [i for i in issues if i not in hard_issues]
+   200→
+   201→    if hard_issues:
+   202→        return CheckResult(
+   203→            "blank-pages", False,
+   204→            "; ".join(hard_issues[:3]),
+   205→            "error"
+   206→        )
+   207→    if soft_issues:
+   208→        return CheckResult(
+   209→            "blank-pages", False,
+   210→            "; ".join(soft_issues[:3]),
+   211→            "warning"
+   212→        )
+   213→
+   214→    return CheckResult("blank-pages", True, "No blank page issues detected")
+   215→
+   216→
+   217→def check_line_spacing(root: ET.Element) -> CheckResult:
+   218→    """Check body paragraph line spacing consistency"""
+   219→    body = root.find(".//w:body", NS)
+   220→    paragraphs = body.findall(".//w:p", NS)
+   221→
+   222→    spacing_values = {}
+   223→    body_para_count = 0
+   224→
+   225→    for p in paragraphs:
+   226→        ppr = p.find("w:pPr", NS)
+   227→        # Skip heading paragraphs
+   228→        if ppr is not None:
+   229→            style = ppr.find("w:pStyle", NS)
+   230→            if style is not None:
+   231→                val = style.get(f"{{{NS['w']}}}val", "")
+   232→                if val.startswith("Heading") or val == "Title":
+   233→                    continue
+   234→
+   235→        spacing = ppr.find("w:spacing", NS) if ppr is not None else None
+   236→        line_val = spacing.get(f"{{{NS['w']}}}line") if spacing is not None else None
+   237→
+   238→        # Only count paragraphs with text content
+   239→        texts = p.findall(".//w:t", NS)
+   240→        if not any(t.text and t.text.strip() for t in texts):
+   241→            continue
+   242→
+   243→        body_para_count += 1
+   244→        key = line_val or "default"
+   245→        spacing_values[key] = spacing_values.get(key, 0) + 1
+   246→
+   247→    if body_para_count == 0:
+   248→        return CheckResult("line-spacing", True, "No body paragraphs")
+   249→
+   250→    if len(spacing_values) <= 1:
+   251→        dominant = list(spacing_values.keys())[0] if spacing_values else "default"
+   252→        return CheckResult("line-spacing", True, f"Line spacing uniform (line={dominant})")
+   253→
+   254→    # Find the most common line spacing
+   255→    dominant = max(spacing_values, key=spacing_values.get)
+   256→    inconsistent = sum(v for k, v in spacing_values.items() if k != dominant)
+   257→    total = sum(spacing_values.values())
+   258→
+   259→    if inconsistent / total > 0.2:
+   260→        return CheckResult(
+   261→            "line-spacing", False,
+   262→            f"Line spacing inconsistent: {dict(spacing_values)}, {inconsistent}/{total} paragraphs differ from dominant spacing {dominant}",
+   263→            "warning"
+   264→        )
+   265→
+   266→    return CheckResult("line-spacing", True, f"Line spacing mostly uniform (line={dominant}, {inconsistent} exceptions)")
+   267→
+   268→
+   269→
+   270→def check_image_overflow(root: ET.Element) -> CheckResult:
+   271→    """Check whether image width may exceed page bounds"""
+   272→    # Get page width
+   273→    sect_pr = root.find(".//w:body/w:sectPr", NS)
+   274→    page_width = 11906  # A4 default
+   275→    margin_left = 1701
+   276→    margin_right = 1417
+   277→
+   278→    if sect_pr is not None:
+   279→        pg_sz = sect_pr.find("w:pgSz", NS)
+   280→        pg_mar = sect_pr.find("w:pgMar", NS)
+   281→        if pg_sz is not None:
+   282→            page_width = int(pg_sz.get(f"{{{NS['w']}}}w", "11906"))
+   283→        if pg_mar is not None:
+   284→            margin_left = int(pg_mar.get(f"{{{NS['w']}}}left", "1701"))
+   285→            margin_right = int(pg_mar.get(f"{{{NS['w']}}}right", "1417"))
+   286→
+   287→    usable_width_emu = (page_width - margin_left - margin_right) * 635  # twips → EMU
+   288→
+   289→    drawings = root.findall(".//wp:inline", NS) + root.findall(".//wp:anchor", NS)
+   290→    oversized = 0
+   291→
+   292→    for dwg in drawings:
+   293→        extent = dwg.find("wp:extent", NS)
+   294→        if extent is not None:
+   295→            cx = int(extent.get("cx", "0"))
+   296→            if cx > usable_width_emu * 1.05:  # 5% tolerance
+   297→                oversized += 1
+   298→
+   299→    if oversized > 0:
+   300→        return CheckResult(
+   301→            "image-overflow", False,
+   302→            f"{oversized} images exceed page usable area",
+   303→            "error"
+   304→        )
+   305→
+   306→    return CheckResult(
+   307→        "image-overflow", True,
+   308→        f"All images within page width ({len(drawings)} images)"
+   309→    )
+   310→
+   311→
+   312→def check_image_aspect_ratio(docx_path: str, root: ET.Element) -> CheckResult:
+   313→    """Check whether images are stretched/distorted (aspect ratio drift).
+   314→
+   315→    Compares the original aspect ratio of embedded images with the display aspect ratio set in wp:extent.
+   316→    Drift >10% is considered distortion (pie charts becoming elliptical, radar charts becoming diamond-shaped, etc).
+   317→    """
+   318→    import zipfile as _zf
+   319→
+   320→    # Build a mapping: rId → image file path inside the zip
+   321→    # We need to parse word/_rels/document.xml.rels
+   322→    rid_to_path = {}
+   323→    try:
+   324→        with _zf.ZipFile(docx_path, 'r') as z:
+   325→            rels_path = 'word/_rels/document.xml.rels'
+   326→            if rels_path in z.namelist():
+   327→                rels_xml = z.read(rels_path)
+   328→                rels_root = ET.fromstring(rels_xml)
+   329→                rels_ns = 'http://schemas.openxmlformats.org/package/2006/relationships'
+   330→                for rel in rels_root.findall(f'{{{rels_ns}}}Relationship'):
+   331→                    rid = rel.get('Id', '')
+   332→                    target = rel.get('Target', '')
+   333→                    rel_type = rel.get('Type', '')
+   334→                    if 'image' in rel_type:
+   335→                        # Target is relative to word/ directory
+   336→                        if not target.startswith('/'):
+   337→                            img_path = 'word/' + target
+   338→                        else:
+   339→                            img_path = target.lstrip('/')
+   340→                        rid_to_path[rid] = img_path
+   341→
+   342→            # Now check each drawing
+   343→            drawings = root.findall(".//wp:inline", NS) + root.findall(".//wp:anchor", NS)
+   344→            distorted = []
+   345→
+   346→            for dwg in drawings:
+   347→                extent = dwg.find("wp:extent", NS)
+   348→                if extent is None:
+   349→                    continue
+   350→                display_cx = int(extent.get("cx", "0"))
+   351→                display_cy = int(extent.get("cy", "0"))
+   352→                if display_cx == 0 or display_cy == 0:
+   353→                    continue
+   354→
+   355→                # Find the blip rId
+   356→                blip = dwg.find(".//a:blip", NS)
+   357→                if blip is None:
+   358→                    continue
+   359→                r_embed = blip.get(f"{{{NS['r']}}}embed", "")
+   360→                if not r_embed or r_embed not in rid_to_path:
+   361→                    continue
+   362→
+   363→                img_zip_path = rid_to_path[r_embed]
+   364→                if img_zip_path not in z.namelist():
+   365→                    continue
+   366→
+   367→                # Read actual image dimensions
+   368→                try:
+   369→                    img_data = z.read(img_zip_path)
+   370→                    from PIL import Image as _PILImage
+   371→                    import io as _io
+   372→                    pil_img = _PILImage.open(_io.BytesIO(img_data))
+   373→                    orig_w, orig_h = pil_img.size
+   374→                    if orig_w == 0 or orig_h == 0:
+   375→                        continue
+   376→                except Exception:
+   377→                    continue
+   378→
+   379→                # Compare aspect ratios
+   380→                orig_ratio = orig_w / orig_h
+   381→                display_ratio = display_cx / display_cy
+   382→                drift = abs(orig_ratio - display_ratio) / orig_ratio
+   383→
+   384→                if drift > 0.10:  # >10% distortion
+   385→                    pct = drift * 100
+   386→                    distorted.append(
+   387→                        f"{img_zip_path.split('/')[-1]}: "
+   388→                        f"original {orig_w}×{orig_h} (ratio={orig_ratio:.2f}), "
+   389→                        f"display ratio={display_ratio:.2f}, distortion {pct:.0f}%"
+   390→                    )
+   391→
+   392→    except Exception:
+   393→        return CheckResult(
+   394→            "image-aspect-ratio", True,
+   395→            "Cannot check image aspect ratio (zip read error)",
+   396→            "info"
+   397→        )
+   398→
+   399→    if distorted:
+   400→        detail = "; ".join(distorted[:3])
+   401→        if len(distorted) > 3:
+   402→            detail += f" ...and {len(distorted)} more"
+   403→        return CheckResult(
+   404→            "image-aspect-ratio", False,
+   405→            f"{len(distorted)} images have aspect ratio distortion: {detail}",
+   406→            "warning"
+   407→        )
+   408→
+   409→    img_count = len(drawings)
+   410→    return CheckResult(
+   411→        "image-aspect-ratio", True,
+   412→        f"All images have correct aspect ratio ({img_count} images)"
+   413→    )
+   414→
+   415→
+   416→def check_font_fallback(root: ET.Element) -> CheckResult:
+   417→    """Check whether potentially missing fonts are used"""
+   418→    SAFE_FONTS = {
+   419→        # Chinese
+   420→        "宋体", "SimSun", "黑体", "SimHei", "微软雅黑", "Microsoft YaHei",
+   421→        "仿宋", "FangSong", "FangSong_GB2312", "楷体", "KaiTi",
+   422→        # English
+   423→        "Times New Roman", "Arial", "Calibri", "Helvetica",
+   424→        "Courier New", "Georgia", "Verdana", "Tahoma",
+   425→        # Universal
+   426→        "Symbol", "Wingdings",
+   427→    }
+   428→
+   429→    fonts_used = set()
+   430→    for rpr in root.findall(".//w:rPr", NS):
+   431→        for font_tag in ["w:rFonts"]:
+   432→            rf = rpr.find(font_tag, NS)
+   433→            if rf is not None:
+   434→                for attr in ["ascii", "eastAsia", "hAnsi", "cs"]:
+   435→                    f = rf.get(f"{{{NS['w']}}}{attr}")
+   436→                    if f:
+   437→                        fonts_used.add(f)
+   438→
+   439→    risky = fonts_used - SAFE_FONTS
+   440→    if risky:
+   441→        return CheckResult(
+   442→            "font-fallback", False,
+   443→            f"Following fonts may be missing on target system: {', '.join(sorted(risky))}",
+   444→            "info"
+   445→        )
+   446→
+   447→    return CheckResult("font-fallback", True, f"All fonts are common system fonts ({len(fonts_used)} types)")
+   448→
+   449→
+   450→
+   451→def check_heading_levels(root: ET.Element) -> CheckResult:
+   452→    """Check whether headings skip levels"""
+   453→    body = root.find(".//w:body", NS)
+   454→    heading_levels = []
+   455→
+   456→    for p in body.findall(".//w:p", NS):
+   457→        ppr = p.find("w:pPr", NS)
+   458→        if ppr is None:
+   459→            continue
+   460→        style = ppr.find("w:pStyle", NS)
+   461→        if style is None:
+   462→            continue
+   463→        val = style.get(f"{{{NS['w']}}}val", "")
+   464→        m = re.match(r"Heading(\d+)", val)
+   465→        if m:
+   466→            heading_levels.append(int(m.group(1)))
+   467→
+   468→    if len(heading_levels) < 2:
+   469→        return CheckResult("heading-levels", True, "Too few headings, skipping check")
+   470→
+   471→    skips = []
+   472→    for i in range(1, len(heading_levels)):
+   473→        diff = heading_levels[i] - heading_levels[i - 1]
+   474→        if diff > 1:
+   475→            skips.append(f"H{heading_levels[i-1]}→H{heading_levels[i]}")
+   476→
+   477→    if skips:
+   478→        return CheckResult(
+   479→            "heading-levels", False,
+   480→            f"Heading level skip: {', '.join(skips[:5])}",
+   481→            "warning"
+   482→        )
+   483→
+   484→    return CheckResult("heading-levels", True, f"Heading levels continuous ({len(heading_levels)} headings)")
+   485→
+   486→
+   487→# check_cover_separation removed — false positives on complex covers (>15 elements is normal)
+   488→
+   489→
+   490→def check_shading_type(root: ET.Element) -> CheckResult:
+   491→    """Check whether ShadingType.SOLID is misused"""
+   492→    shadings = root.findall(".//w:shd", NS)
+   493→    solid_count = 0
+   494→
+   495→    for shd in shadings:
+   496→        val = shd.get(f"{{{NS['w']}}}val", "")
+   497→        if val == "solid":
+   498→            solid_count += 1
+   499→
+   500→    if solid_count > 0:
+   501→        return CheckResult(
+   502→            "shading-type", False,
+   503→            f"Found {solid_count} instances of ShadingType.SOLID (should be CLEAR), may cause black cells",
+   504→            "error"
+   505→        )
+   506→
+   507→    return CheckResult("shading-type", True, "No ShadingType.SOLID misuse found")
+   508→
+   509→
+   510→
+   511→def check_toc(root: ET.Element, docx_path: str = "") -> CheckResult:
+   512→    """Check TOC quality: field existence, headings presence, outlineLvl, updateFields."""
+   513→    body = root.find(".//w:body", NS)
+   514→    if body is None:
+   515→        return CheckResult("toc", True, "Document body is empty, skipping TOC check", "info")
+   516→
+   517→    paragraphs = list(body)
+   518→    w_ns = NS["w"]
+   519→
+   520→    # --- Detect headings and their levels ---
+   521→    heading_count = 0
+   522→    heading_levels_used = set()  # e.g. {1, 2, 3}
+   523→    for p in paragraphs:
+   524→        if p.tag != f"{{{w_ns}}}p":
+   525→            continue
+   526→        ppr = p.find(f"{{{w_ns}}}pPr")
+   527→        if ppr is None:
+   528→            continue
+   529→        ps = ppr.find(f"{{{w_ns}}}pStyle")
+   530→        if ps is None:
+   531→            continue
+   532→        val = ps.get(f"{{{w_ns}}}val", "")
+   533→        m = re.match(r"(?i)heading\s*(\d)", val)
+   534→        if m:
+   535→            heading_count += 1
+   536→            heading_levels_used.add(int(m.group(1)))
+   537→
+   538→    # --- Detect TOC field ---
+   539→    has_toc = False
+   540→    for instr in root.findall(f".//{{{w_ns}}}instrText"):
+   541→        if instr.text and "TOC" in instr.text.upper():
+   542→            has_toc = True
+   543→            break
+   544→    if not has_toc:
+   545→        for fld in root.findall(f".//{{{w_ns}}}fldSimple"):
+   546→            if "TOC" in fld.get(f"{{{w_ns}}}instr", "").upper():
+   547→                has_toc = True
+   548→                break
+   549→    # Also check SDT-wrapped TOC
+   550→    if not has_toc:
+   551→        for sdt in root.findall(f".//{{{w_ns}}}sdt"):
+   552→            for instr in sdt.findall(f".//{{{w_ns}}}instrText"):
+   553→                if instr.text and "TOC" in instr.text.upper():
+   554→                    has_toc = True
+   555→                    break
+   556→            if has_toc:
+   557→                break
+   558→
+   559→    issues = []
+   560→
+   561→    # Check 1: Document has a "目录" / "目  录" / "Table of Contents" title but no TOC field
+   562→    has_toc_title = False
+   563→    toc_title_pattern = re.compile(r'^(?:目\s*录|table\s+of\s+contents|contents)$', re.IGNORECASE)
+   564→    for p in paragraphs:
+   565→        if p.tag != f"{{{w_ns}}}p":
+   566→            continue
+   567→        texts = p.findall(f".//{{{w_ns}}}t")
+   568→        p_text = "".join(t.text or "" for t in texts).strip()
+   569→        if toc_title_pattern.match(p_text):
+   570→            has_toc_title = True
+   571→            break
+   572→
+   573→    if has_toc_title and not has_toc:
+   574→        issues.append("TOC_FIELD_MISSING: document has a TOC title but no TOC field element — add TableOfContents in code")
+   575→
+   576→    # Check 2: TOC field exists but no headings in document → TOC will be empty after update
+   577→    if has_toc and heading_count == 0:
+   578→        issues.append("TOC_NO_HEADINGS: TOC field exists but document has 0 Heading-styled paragraphs — TOC will be empty after update")
+   579→
+   580→    # Check 3 & 4: Read styles.xml and settings.xml from DOCX (only when TOC exists)
+   581→    if has_toc and docx_path:
+   582→        try:
+   583→            import zipfile
+   584→            with zipfile.ZipFile(docx_path, 'r') as zf:
+   585→                # Check 3: outlineLvl missing in Heading styles
+   586→                if 'word/styles.xml' in zf.namelist():
+   587→                    styles_content = zf.read('word/styles.xml').decode('utf-8')
+   588→                    styles_root = ET.fromstring(styles_content)
+   589→
+   590→                    missing_outline = []
+   591→                    for level in sorted(heading_levels_used):
+   592→                        style_id = f"Heading{level}"
+   593→                        # Find <w:style w:styleId="HeadingN">
+   594→                        for style_elem in styles_root.findall(f".//{{{w_ns}}}style"):
+   595→                            sid = style_elem.get(f"{{{w_ns}}}styleId", "")
+   596→                            if sid == style_id:
+   597→                                # Check if pPr has outlineLvl
+   598→                                ppr = style_elem.find(f"{{{w_ns}}}pPr")
+   599→                                has_outline = False
+   600→                                if ppr is not None:
+   601→                                    ol = ppr.find(f"{{{w_ns}}}outlineLvl")
+   602→                                    if ol is not None:
+   603→                                        has_outline = True
+   604→                                if not has_outline:
+   605→                                    missing_outline.append(style_id)
+   606→                                break
+   607→
+   608→                    if missing_outline:
+   609→                        issues.append(
+   610→                            "TOC_OUTLINE_MISSING: %s style(s) missing outlineLvl — "
+   611→                            "Word TOC update won't find these headings. "
+   612→                            "Run add_toc_placeholders.py to fix" % ", ".join(missing_outline)
+   613→                        )
+   614→
+   615→                # Check 4: updateFields not set to true
+   616→                if 'word/settings.xml' in zf.namelist():
+   617→                    settings_content = zf.read('word/settings.xml').decode('utf-8')
+   618→                    # Check for <w:updateFields w:val="true"/>
+   619→                    update_ok = bool(re.search(
+   620→                        r'<w:updateFields\s+[^>]*w:val\s*=\s*"true"',
+   621→                        settings_content
+   622→                    ))
+   623→                    if not update_ok:
+   624→                        issues.append(
+   625→                            "TOC_UPDATE_DISABLED: settings.xml missing updateFields=true — "
+   626→                            "Word won't prompt to update TOC on open. "
+   627→                            "Run add_toc_placeholders.py to fix"
+   628→                        )
+   629→        except Exception as e:
+   630→            issues.append(f"TOC_CHECK_ERROR: failed to read styles/settings from DOCX: {e}")
+   631→
+   632→    if not issues:
+   633→        if has_toc:
+   634→            return CheckResult("toc", True, "TOC field present and update-ready")
+   635→        else:
+   636→            return CheckResult("toc", True, "No TOC needed")
+   637→
+   638→    severity = "error" if any(k in i for i in issues for k in ("FIELD_MISSING", "NO_HEADINGS", "OUTLINE_MISSING")) else "warning"
+   639→    return CheckResult("toc", False, "; ".join(issues[:5]), severity)
+   640→
+   641→
+   642→
+   643→
+   644→def check_cover_overflow(root: ET.Element) -> CheckResult:
+   645→    """Detect cover section issues: oversized fonts, excessive spacing, trailing empty content."""
+   646→    sections = get_sections(root)
+   647→    if not sections:
+   648→        return CheckResult("cover-overflow", True, "No sections found")
+   649→
+   650→    sec0 = sections[0]
+   651→    sect_pr = sec0["sectPr"]
+   652→
+   653→    # Get page dimensions and margins for accurate available height calculation
+   654→    pg_sz = sect_pr.find("w:pgSz", NS)
+   655→    pg_mar = sect_pr.find("w:pgMar", NS)
+   656→    page_height = int(pg_sz.get(f"{{{NS['w']}}}h", "16838")) if pg_sz is not None else 16838
+   657→    margin_top = int(pg_mar.get(f"{{{NS['w']}}}top", "0")) if pg_mar is not None else 0
+   658→    margin_bottom = int(pg_mar.get(f"{{{NS['w']}}}bottom", "0")) if pg_mar is not None else 0
+   659→
+   660→    issues = []
+   661→    children = sec0["children"]
+   662→
+   663→    # Check 1: Oversized font in cover section (> 44pt = 88 half-points = 889000 EMU)
+   664→    max_font_size = 0
+   665→    for child in children:
+   666→        for sz in child.findall(".//" + f"{{{NS['w']}}}sz"):
+   667→            val = sz.get(f"{{{NS['w']}}}val")
+   668→            if val and val.isdigit():
+   669→                size_hp = int(val)
+   670→                if size_hp > max_font_size:
+   671→                    max_font_size = size_hp
+   672→
+   673→    if max_font_size > 88:  # 88 half-points = 44pt
+   674→        issues.append(
+   675→            f"Cover has font size {max_font_size // 2}pt (>{44}pt max). "
+   676→            f"Use calcTitleLayout() for dynamic sizing"
+   677→        )
+   678→
+   679→    # Check 2: Excessive spacing.before in cover section (> 5000 twips)
+   680→    max_spacing = 0
+   681→    for child in children:
+   682→        for sp in child.findall(".//" + f"{{{NS['w']}}}spacing"):
+   683→            before = sp.get(f"{{{NS['w']}}}before")
+   684→            if before and before.isdigit():
+   685→                val = int(before)
+   686→                if val > max_spacing:
+   687→                    max_spacing = val
+   688→
+   689→    if max_spacing > 5000:
+   690→        issues.append(
+   691→            f"Cover has spacing.before={max_spacing} twips (>5000 max). "
+   692→            f"Use calcCoverSpacing() for dynamic spacing"
+   693→        )
+   694→
+   695→    # Check 3: Trailing empty paragraphs in cover section
+   696→    trailing_empty = 0
+   697→    for child in reversed(children):
+   698→        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+   699→        if tag != "p":
+   700→            break
+   701→        texts = child.findall(".//" + f"{{{NS['w']}}}t")
+   702→        has_text = any(t.text and t.text.strip() for t in texts)
+   703→        if not has_text:
+   704→            trailing_empty += 1
+   705→        else:
+   706→            break
+   707→
+   708→    if trailing_empty > 2:
+   709→        issues.append(
+   710→            f"Cover section ends with {trailing_empty} empty paragraphs (max 2 allowed) — "
+   711→            f"excessive empty paragraphs may cause blank page after cover"
+   712→        )
+   713→
+   714→    if issues:
+   715→        return CheckResult(
+   716→            "cover-overflow", False,
+   717→            "; ".join(issues),
+   718→            "error"
+   719→        )
+   720→
+   721→    return CheckResult("cover-overflow", True, "Cover section layout looks OK")
+   722→
+   723→
+   724→def run_all_checks(docx_path: str) -> list[CheckResult]:
+   725→    """Run all checks"""
+   726→    root = read_document_xml(docx_path)
+   727→
+   728→    checks = [
+   729→        check_blank_pages,
+   730→        check_cover_overflow,
+   731→        check_line_spacing,
+   732→        check_image_overflow,
+   733→        check_font_fallback,
+   734→        check_heading_levels,
+   735→        check_shading_type,
+   736→    ]
+   737→
+   738→    results = []
+   739→    for check_fn in checks:
+   740→        try:
+   741→            results.append(check_fn(root))
+   742→        except Exception as e:
+   743→            results.append(CheckResult(
+   744→                check_fn.__name__.replace("check_", ""),
+   745→                False,
+   746→                f"Check error: {e}",
+   747→                "error"
+   748→            ))
+   749→
+   750→    # TOC check needs both root and docx_path
+   751→    try:
+   752→        results.append(check_toc(root, docx_path))
+   753→    except Exception as e:
+   754→        results.append(CheckResult("toc", False, f"Check error: {e}", "error"))
+   755→
+   756→    # Image aspect ratio check needs both root and docx_path
+   757→    try:
+   758→        results.append(check_image_aspect_ratio(docx_path, root))
+   759→    except Exception as e:
+   760→        results.append(CheckResult("image-aspect-ratio", False, f"Check error: {e}", "error"))
+   761→
+   762→    return results
+   763→
+   764→
+   765→def main():
+   766→    import argparse
+   767→    parser = argparse.ArgumentParser(description="docx business rule self-check")
+   768→    parser.add_argument("docx_path", help="Path to the .docx file to check")
+   769→    parser.add_argument("--json", action="store_true", help="Output in JSON format")
+   770→    parser.add_argument("--strict", action="store_true", help="Treat warnings as failures")
+   771→    args = parser.parse_args()
+   772→
+   773→    if not Path(args.docx_path).exists():
+   774→        print(f"❌ File not found: {args.docx_path}")
+   775→        sys.exit(1)
+   776→
+   777→    results = run_all_checks(args.docx_path)
+   778→
+   779→    if args.json:
+   780→        print(json.dumps([r.to_dict() for r in results], ensure_ascii=False, indent=2))
+   781→    else:
+   782→        print(f"\n📋 Document self-check report: {args.docx_path}\n")
+   783→        for r in results:
+   784→            print(f"  {r}")
+   785→
+   786→        passed = sum(1 for r in results if r.passed)
+   787→        total = len(results)
+   788→        errors = sum(1 for r in results if not r.passed and r.severity == "error")
+   789→        warnings = sum(1 for r in results if not r.passed and r.severity == "warning")
+   790→
+   791→        print(f"\n  {'─' * 50}")
+   792→        print(f"  Passed {passed}/{total} | ❌ {errors} errors | ⚠️ {warnings} warnings\n")
+   793→
+   794→    # Exit code
+   795→    has_errors = any(not r.passed and r.severity == "error" for r in results)
+   796→    has_warnings = any(not r.passed and r.severity == "warning" for r in results)
+   797→
+   798→    if has_errors:
+   799→        sys.exit(2)
+   800→    elif args.strict and has_warnings:
+   801→        sys.exit(1)
+   802→    else:
+   803→        sys.exit(0)
+   804→
+   805→
+   806→if __name__ == "__main__":
+   807→    main()
+   808→
