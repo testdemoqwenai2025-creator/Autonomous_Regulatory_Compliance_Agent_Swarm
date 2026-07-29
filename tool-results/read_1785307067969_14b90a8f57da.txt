@@ -1,0 +1,1165 @@
+     1→<!DOCTYPE html>
+     2→<html lang="en">
+     3→<head>
+     4→<meta charset="utf-8">
+     5→<meta name="viewport" content="width=device-width, initial-scale=1">
+     6→<title>Maritime Compliance Swarm</title>
+     7→<style>
+     8→  :root {
+     9→    --navy: #0b1426;
+    10→    --navy-light: #131d35;
+    11→    --blue: #1e6dd4;
+    12→    --blue-glow: #2b82ff;
+    13→    --cyan: #00c9db;
+    14→    --green: #0dd690;
+    15→    --amber: #f0b429;
+    16→    --red: #e5484d;
+    17→    --purple: #a78bfa;
+    18→    --text: #e2e8f0;
+    19→    --text-dim: #7b8ba3;
+    20→    --card: #162038;
+    21→    --card-hover: #1c2a4a;
+    22→    --border: #233054;
+    23→    --radius: 10px;
+    24→  }
+    25→
+    26→  * { margin: 0; padding: 0; box-sizing: border-box; }
+    27→
+    28→  body {
+    29→    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    30→    background: var(--navy);
+    31→    color: var(--text);
+    32→    line-height: 1.6;
+    33→    min-height: 100vh;
+    34→  }
+    35→
+    36→  /* ── Header ────────────────────────────── */
+    37→  header {
+    38→    background: var(--navy-light);
+    39→    border-bottom: 1px solid var(--border);
+    40→    padding: 20px 32px;
+    41→    display: flex;
+    42→    align-items: center;
+    43→    justify-content: space-between;
+    44→    position: sticky;
+    45→    top: 0;
+    46→    z-index: 100;
+    47→  }
+    48→
+    49→  .logo-area { display: flex; align-items: center; gap: 14px; }
+    50→
+    51→  .logo-icon {
+    52→    width: 42px; height: 42px;
+    53→    background: linear-gradient(135deg, var(--blue), var(--cyan));
+    54→    border-radius: 10px;
+    55→    display: flex; align-items: center; justify-content: center;
+    56→    font-size: 20px; font-weight: 800; color: #fff;
+    57→  }
+    58→
+    59→  .logo-text h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    60→  .logo-text span { font-size: 12px; color: var(--text-dim); }
+    61→
+    62→  .header-status {
+    63→    display: flex; align-items: center; gap: 8px;
+    64→    font-size: 13px; color: var(--text-dim);
+    65→  }
+    66→
+    67→  .status-dot {
+    68→    width: 8px; height: 8px; border-radius: 50%;
+    69→    background: var(--green);
+    70→    box-shadow: 0 0 8px var(--green);
+    71→  }
+    72→
+    73→  .status-dot.degraded { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+    74→  .status-dot.down { background: var(--red); box-shadow: 0 0 8px var(--red); }
+    75→
+    76→  /* ── Layout ────────────────────────────── */
+    77→  .container { max-width: 1400px; margin: 0 auto; padding: 28px 32px; }
+    78→
+    79→  /* ── Stats row ─────────────────────────── */
+    80→  .stats-row {
+    81→    display: grid;
+    82→    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    83→    gap: 16px;
+    84→    margin-bottom: 28px;
+    85→  }
+    86→
+    87→  .stat-card {
+    88→    background: var(--card);
+    89→    border: 1px solid var(--border);
+    90→    border-radius: var(--radius);
+    91→    padding: 20px 22px;
+    92→    transition: border-color 0.2s;
+    93→  }
+    94→  .stat-card:hover { border-color: var(--blue); }
+    95→
+    96→  .stat-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    97→  .stat-value { font-size: 32px; font-weight: 700; }
+    98→  .stat-value.critical { color: var(--red); }
+    99→  .stat-value.high { color: var(--amber); }
+   100→  .stat-value.ok { color: var(--green); }
+   101→  .stat-value.info { color: var(--cyan); }
+   102→  .stat-value.purple { color: var(--purple); }
+   103→
+   104→  /* ── Sections ───────────────────────────── */
+   105→  .section {
+   106→    background: var(--card);
+   107→    border: 1px solid var(--border);
+   108→    border-radius: var(--radius);
+   109→    margin-bottom: 24px;
+   110→    overflow: hidden;
+   111→  }
+   112→
+   113→  .section-header {
+   114→    padding: 18px 22px;
+   115→    border-bottom: 1px solid var(--border);
+   116→    display: flex;
+   117→    align-items: center;
+   118→    justify-content: space-between;
+   119→  }
+   120→
+   121→  .section-header h2 { font-size: 15px; font-weight: 600; }
+   122→
+   123→  .section-body { padding: 18px 22px; }
+   124→
+   125→  /* ── Buttons ────────────────────────────── */
+   126→  .btn {
+   127→    display: inline-flex; align-items: center; gap: 6px;
+   128→    padding: 8px 16px; border-radius: 7px;
+   129→    border: 1px solid var(--border); background: var(--navy-light);
+   130→    color: var(--text); font-size: 13px; cursor: pointer;
+   131→    transition: all 0.15s; font-family: inherit;
+   132→  }
+   133→  .btn:hover { background: var(--card-hover); border-color: var(--blue); }
+   134→  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+   135→
+   136→  .btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+   137→  .btn-primary:hover { background: var(--blue-glow); }
+   138→  .btn-danger { border-color: var(--red); color: var(--red); }
+   139→  .btn-danger:hover { background: rgba(229,72,77,0.12); }
+   140→  .btn-sm { padding: 5px 12px; font-size: 12px; }
+   141→
+   142→  /* ── Tables ─────────────────────────────── */
+   143→  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+   144→  th { text-align: left; padding: 10px 12px; color: var(--text-dim); font-weight: 500; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+   145→  td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+   146→  tr:last-child td { border-bottom: none; }
+   147→  tr:hover td { background: rgba(255,255,255,0.02); }
+   148→
+   149→  /* ── Badges ─────────────────────────────── */
+   150→  .badge {
+   151→    display: inline-block; padding: 2px 8px; border-radius: 5px;
+   152→    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+   153→  }
+   154→  .badge-critical { background: rgba(229,72,77,0.15); color: var(--red); }
+   155→  .badge-high { background: rgba(240,180,41,0.15); color: var(--amber); }
+   156→  .badge-medium { background: rgba(27,109,212,0.15); color: var(--blue); }
+   157→  .badge-low { background: rgba(125,139,163,0.15); color: var(--text-dim); }
+   158→  .badge-open { background: rgba(229,72,77,0.15); color: var(--red); }
+   159→  .badge-remediated { background: rgba(13,214,144,0.15); color: var(--green); }
+   160→  .badge-in_progress { background: rgba(240,180,41,0.15); color: var(--amber); }
+   161→  .badge-compliant { background: rgba(13,214,144,0.15); color: var(--green); }
+   162→  .badge-non-compliant { background: rgba(229,72,77,0.15); color: var(--red); }
+   163→  .badge-ok { background: rgba(13,214,144,0.15); color: var(--green); }
+   164→  .badge-degraded { background: rgba(240,180,41,0.15); color: var(--amber); }
+   165→  .badge-unavailable { background: rgba(229,72,77,0.15); color: var(--red); }
+   166→  .badge-detected { background: rgba(229,72,77,0.15); color: var(--red); }
+   167→  .badge-triaged { background: rgba(240,180,41,0.15); color: var(--amber); }
+   168→  .badge-assigned { background: rgba(27,109,212,0.15); color: var(--blue); }
+   169→  .badge-in_remediation { background: rgba(167,139,250,0.15); color: var(--purple); }
+   170→  .badge-awaiting_verification { background: rgba(0,201,219,0.15); color: var(--cyan); }
+   171→  .badge-escalated { background: rgba(229,72,77,0.2); color: #ff6b6b; }
+   172→  .badge-verified { background: rgba(13,214,144,0.15); color: var(--green); }
+   173→  .badge-closed { background: rgba(125,139,163,0.15); color: var(--text-dim); }
+   174→  .badge-risk_accepted { background: rgba(240,180,41,0.15); color: var(--amber); }
+   175→  .badge-false_positive { background: rgba(125,139,163,0.15); color: var(--text-dim); }
+   176→
+   177→  /* ── Code / JSON ────────────────────────── */
+   178→  pre, code {
+   179→    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+   180→    font-size: 12px;
+   181→  }
+   182→  pre {
+   183→    background: var(--navy); border: 1px solid var(--border);
+   184→    border-radius: 7px; padding: 16px; overflow-x: auto;
+   185→    max-height: 400px; white-space: pre-wrap; word-break: break-word;
+   186→  }
+   187→
+   188→  /* ── Tabs ───────────────────────────────── */
+   189→  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 22px; overflow-x: auto; }
+   190→  .tab {
+   191→    padding: 12px 18px; font-size: 13px; color: var(--text-dim);
+   192→    cursor: pointer; border-bottom: 2px solid transparent;
+   193→    transition: all 0.15s; background: none;
+   194→    border-top: none; border-left: none; border-right: none;
+   195→    font-family: inherit; white-space: nowrap;
+   196→  }
+   197→  .tab:hover { color: var(--text); }
+   198→  .tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+   199→
+   200→  .tab-panel { display: none; }
+   201→  .tab-panel.active { display: block; }
+   202→
+   203→  /* ── Textarea / Input ───────────────────── */
+   204→  textarea, input[type="text"], select {
+   205→    width: 100%; background: var(--navy); border: 1px solid var(--border);
+   206→    border-radius: 7px; padding: 12px 14px; color: var(--text);
+   207→    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+   208→    font-size: 12px; resize: vertical;
+   209→  }
+   210→  textarea:focus, input:focus, select:focus { outline: none; border-color: var(--blue); }
+   211→
+   212→  .input-row { display: flex; gap: 12px; margin-bottom: 14px; align-items: flex-end; }
+   213→  .input-group { flex: 1; }
+   214→  .input-group label { display: block; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+   215→
+   216→  /* ── Empty state ────────────────────────── */
+   217→  .empty { padding: 40px 22px; text-align: center; color: var(--text-dim); font-size: 13px; }
+   218→
+   219→  /* ── Toast ──────────────────────────────── */
+   220→  .toast {
+   221→    position: fixed; bottom: 24px; right: 24px;
+   222→    background: var(--card); border: 1px solid var(--border);
+   223→    border-radius: 8px; padding: 12px 20px; font-size: 13px;
+   224→    z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+   225→    display: none;
+   226→  }
+   227→  .toast.show { display: block; }
+   228→  .toast.error { border-color: var(--red); }
+   229→  .toast.success { border-color: var(--green); }
+   230→
+   231→  /* ── Loading ────────────────────────────── */
+   232→  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; }
+   233→  @keyframes spin { to { transform: rotate(360deg); } }
+   234→
+   235→  /* ── Tool grid ──────────────────────────── */
+   236→  .tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+   237→  .tool-card {
+   238→    background: var(--navy-light); border: 1px solid var(--border);
+   239→    border-radius: 8px; padding: 18px; cursor: pointer; transition: all 0.15s;
+   240→  }
+   241→  .tool-card:hover { border-color: var(--blue); transform: translateY(-2px); }
+   242→  .tool-card h3 { font-size: 14px; margin-bottom: 6px; }
+   243→  .tool-card p { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+   244→  .tool-tag { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 4px; margin-top: 10px; font-weight: 600; text-transform: uppercase; }
+   245→  .tool-tag.python { background: rgba(27,109,212,0.15); color: var(--blue); }
+   246→  .tool-tag.golang { background: rgba(0,201,219,0.15); color: var(--cyan); }
+   247→
+   248→  /* ── Connectivity grid ──────────────────── */
+   249→  .conn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+   250→  .conn-card {
+   251→    background: var(--navy-light); border: 1px solid var(--border);
+   252→    border-radius: 8px; padding: 14px 18px;
+   253→    display: flex; align-items: center; gap: 14px;
+   254→    transition: border-color 0.2s;
+   255→  }
+   256→  .conn-card.ok { border-left: 3px solid var(--green); }
+   257→  .conn-card.degraded { border-left: 3px solid var(--amber); }
+   258→  .conn-card.unavailable { border-left: 3px solid var(--red); }
+   259→  .conn-icon { font-size: 22px; }
+   260→  .conn-name { font-size: 13px; font-weight: 600; }
+   261→  .conn-detail { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+   262→  .conn-latency { font-size: 11px; color: var(--cyan); margin-top: 2px; }
+   263→
+   264→  /* ── State diagram ──────────────────────── */
+   265→  .state-flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 18px; }
+   266→  .state-node {
+   267→    padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
+   268→    border: 1px solid var(--border); background: var(--navy-light);
+   269→    text-transform: uppercase; letter-spacing: 0.3px;
+   270→  }
+   271→  .state-arrow { color: var(--text-dim); font-size: 14px; }
+   272→
+   273→  /* ── Timeline ───────────────────────────── */
+   274→  .timeline { position: relative; padding-left: 24px; }
+   275→  .timeline::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+   276→  .tl-item { position: relative; margin-bottom: 16px; padding: 10px 14px; background: var(--navy-light); border: 1px solid var(--border); border-radius: 7px; }
+   277→  .tl-item::before { content: ''; position: absolute; left: -20px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--blue); border: 2px solid var(--navy); }
+   278→  .tl-item.escalated::before { background: var(--red); }
+   279→  .tl-item.verified::before { background: var(--green); }
+   280→  .tl-from { font-size: 11px; color: var(--text-dim); }
+   281→  .tl-to { font-size: 14px; font-weight: 600; }
+   282→  .tl-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+   283→
+   284→  /* ── Event type tags ───────────────────── */
+   285→  .evt-tag {
+   286→    display: inline-block; padding: 2px 8px; border-radius: 5px;
+   287→    font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace;
+   288→    background: rgba(27,109,212,0.12); color: var(--blue);
+   289→  }
+   290→  .evt-tag.reaction { background: rgba(167,139,250,0.12); color: var(--purple); }
+   291→
+   292→  /* ── Rule cards ────────────────────────── */
+   293→  .rule-card {
+   294→    background: var(--navy-light); border: 1px solid var(--border);
+   295→    border-radius: 8px; padding: 14px 18px; margin-bottom: 10px;
+   296→    display: flex; align-items: center; gap: 14px;
+   297→  }
+   298→  .rule-priority { font-size: 11px; font-weight: 700; color: var(--cyan); min-width: 28px; }
+   299→  .rule-info { flex: 1; }
+   300→  .rule-name { font-size: 13px; font-weight: 600; }
+   301→  .rule-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+   302→  .rule-count { font-size: 11px; color: var(--text-dim); }
+   303→  .toggle-switch { position: relative; width: 40px; height: 22px; cursor: pointer; }
+   304→  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+   305→  .toggle-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--border); border-radius: 11px; transition: 0.2s; }
+   306→  .toggle-slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; bottom: 3px; background: var(--text-dim); border-radius: 50%; transition: 0.2s; }
+   307→  .toggle-switch input:checked + .toggle-slider { background: var(--green); }
+   308→  .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); background: #fff; }
+   309→</style>
+   310→</head>
+   311→<body>
+   312→
+   313→<header>
+   314→  <div class="logo-area">
+   315→    <div class="logo-icon">CS</div>
+   316→    <div class="logo-text">
+   317→      <h1>Maritime Compliance Swarm</h1>
+   318→      <span>Global Data Governance & Privacy Automation</span>
+   319→    </div>
+   320→  </div>
+   321→  <div class="header-status">
+   322→    <div class="status-dot" id="statusDot"></div>
+   323→    <span id="statusText">Checking...</span>
+   324→  </div>
+   325→</header>
+   326→
+   327→<div class="container">
+   328→
+   329→  <!-- Stats Row -->
+   330→  <div class="stats-row" id="statsRow">
+   331→    <div class="stat-card">
+   332→      <div class="stat-label">Open Findings</div>
+   333→      <div class="stat-value critical" id="statFindings">--</div>
+   334→    </div>
+   335→    <div class="stat-card">
+   336→      <div class="stat-label">Avg MTTR (hrs)</div>
+   337→      <div class="stat-value high" id="statMTTR">--</div>
+   338→    </div>
+   339→    <div class="stat-card">
+   340→      <div class="stat-label">EDI Profiles</div>
+   341→      <div class="stat-value info" id="statProfiles">--</div>
+   342→    </div>
+   343→    <div class="stat-card">
+   344→      <div class="stat-label">Active Policies</div>
+   345→      <div class="stat-value ok" id="statPolicies">--</div>
+   346→    </div>
+   347→    <div class="stat-card">
+   348→      <div class="stat-label">Events Stored</div>
+   349→      <div class="stat-value purple" id="statEvents">--</div>
+   350→    </div>
+   351→    <div class="stat-card">
+   352→      <div class="stat-label">Reactions Fired</div>
+   353→      <div class="stat-value info" id="statReactions">--</div>
+   354→    </div>
+   355→  </div>
+   356→
+   357→  <!-- Tabs -->
+   358→  <div class="section">
+   359→    <div class="tabs">
+   360→      <button class="tab active" data-tab="tools">Tools</button>
+   361→      <button class="tab" data-tab="connectivity">Connectivity</button>
+   362→      <button class="tab" data-tab="anonymiser">Anonymiser</button>
+   363→      <button class="tab" data-tab="auditor">Auditor</button>
+   364→      <button class="tab" data-tab="remediation">Remediation</button>
+   365→      <button class="tab" data-tab="mttr">MTTR Tracker</button>
+   366→      <button class="tab" data-tab="findings">Findings</button>
+   367→      <button class="tab" data-tab="state-machine">State Machine</button>
+   368→      <button class="tab" data-tab="event-bus">Event Bus</button>
+   369→    </div>
+   370→
+   371→    <!-- Tools Overview -->
+   372→    <div class="tab-panel active" id="panel-tools">
+   373→      <div class="section-body">
+   374→        <div class="tool-grid">
+   375→          <div class="tool-card" onclick="switchTab('anonymiser')">
+   376→            <h3>1. PII Anonymiser</h3>
+   377→            <p>HMAC-SHA256 deterministic tokenisation, Fernet encryption, multi-jurisdiction rules (GDPR, CCPA, LGPD, PDPA, PIPA).</p>
+   378→            <span class="tool-tag python">Python</span>
+   379→          </div>
+   380→          <div class="tool-card" onclick="switchTab('auditor')">
+   381→            <h3>2. EDI SQL Auditor</h3>
+   382→            <p>11 parametric SQL queries across 5 compliance domains: encryption, customs, EDI format, retention, access control.</p>
+   383→            <span class="tool-tag python">Python</span>
+   384→          </div>
+   385→          <div class="tool-card" onclick="switchTab('remediation')">
+   386→            <h3>3. Remediation Generator</h3>
+   387→            <p>Decision matrix maps risk categories to policy actions. Supports dry-run, staged, and apply modes.</p>
+   388→            <span class="tool-tag python">Python</span>
+   389→          </div>
+   390→          <div class="tool-card" onclick="switchTab('mttr')">
+   391→            <h3>4. MTTR Tracker</h3>
+   392→            <p>Buffered event ingestion with background flush. Tracks finding lifecycle phases with avg/P95 metrics.</p>
+   393→            <span class="tool-tag golang">Golang</span>
+   394→          </div>
+   395→          <div class="tool-card" onclick="switchTab('state-machine')">
+   396→            <h3>5. Finding State Machine</h3>
+   397→            <p>10-state lifecycle with guard conditions, timeout SLAs, audit trail, and auto-escalation.</p>
+   398→            <span class="tool-tag python">Python</span>
+   399→          </div>
+   400→          <div class="tool-card" onclick="switchTab('event-bus')">
+   401→            <h3>6. Event Bus & Reactions</h3>
+   402→            <p>Database-backed event store, PG LISTEN/NOTIFY, 7 autonomous reaction rules.</p>
+   403→            <span class="tool-tag python">Python</span>
+   404→          </div>
+   405→        </div>
+   406→      </div>
+   407→    </div>
+   408→
+   409→    <!-- Connectivity Panel -->
+   410→    <div class="tab-panel" id="panel-connectivity">
+   411→      <div class="section-body">
+   412→        <div style="display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center">
+   413→          <button class="btn btn-primary" onclick="loadConnectivity()">
+   414→            <span class="spinner" id="connSpinner" style="display:none"></span>
+   415→            Run Connectivity Check
+   416→          </button>
+   417→          <span id="connTimestamp" style="font-size:12px; color:var(--text-dim)"></span>
+   418→          <span style="margin-left:auto; font-size:12px; color:var(--text-dim)">GET /api/v1/system/connectivity</span>
+   419→        </div>
+   420→        <div id="connOverall" style="margin-bottom:16px"></div>
+   421→        <div class="conn-grid" id="connGrid"></div>
+   422→        <pre id="connOutput" style="margin-top:16px; display:none"></pre>
+   423→      </div>
+   424→    </div>
+   425→
+   426→    <!-- Anonymiser Panel -->
+   427→    <div class="tab-panel" id="panel-anonymiser">
+   428→      <div class="section-body">
+   429→        <div class="input-row">
+   430→          <div class="input-group" style="max-width:240px">
+   431→            <label>Manifest ID</label>
+   432→            <input type="text" id="manifestId" placeholder="BL-SINGAPORE-001">
+   433→          </div>
+   434→          <div style="display:flex; gap:8px; padding-bottom:1px">
+   435→            <button class="btn" onclick="doScan()">Scan PII</button>
+   436→            <button class="btn btn-primary" onclick="doAnonymise()">Anonymise</button>
+   437→          </div>
+   438→        </div>
+   439→        <textarea id="manifestInput" rows="10" placeholder='{"consignee_name": "John Doe", "consignee_email": "john@shipping.com", "consignee_phone": "+44 20 7946 0958", "passport_number": "AB1234567", "container_id": "MSKU1234567", "voyage_number": "V2025-042"}'></textarea>
+   440→        <pre id="anonymiserOutput" style="margin-top:14px; display:none"></pre>
+   441→      </div>
+   442→    </div>
+   443→
+   444→    <!-- Auditor Panel -->
+   445→    <div class="tab-panel" id="panel-auditor">
+   446→      <div class="section-body">
+   447→        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+   448→          <button class="btn btn-primary" onclick="doRunAudit(null)">Run All Audits</button>
+   449→          <button class="btn" onclick="doRunAudit('encryption')">Encryption</button>
+   450→          <button class="btn" onclick="doRunAudit('customs_documentation')">Customs</button>
+   451→          <button class="btn" onclick="doRunAudit('edi_format')">EDI Format</button>
+   452→          <button class="btn" onclick="doRunAudit('data_retention')">Data Retention</button>
+   453→          <button class="btn" onclick="doRunAudit('access_control')">Access Control</button>
+   454→          <button class="btn" onclick="loadProfiles()" style="margin-left:auto">Load EDI Profiles</button>
+   455→        </div>
+   456→        <div id="auditResults"></div>
+   457→        <pre id="auditOutput" style="margin-top:14px; display:none"></pre>
+   458→      </div>
+   459→    </div>
+   460→
+   461→    <!-- Remediation Panel -->
+   462→    <div class="tab-panel" id="panel-remediation">
+   463→      <div class="section-body">
+   464→        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+   465→          <button class="btn" onclick="doGeneratePolicies('dry-run')">Generate Policies (Dry-Run)</button>
+   466→          <button class="btn" onclick="doGeneratePolicies('staged')">Generate Policies (Staged)</button>
+   467→          <button class="btn btn-danger" onclick="doGeneratePolicies('apply')">Apply Policies</button>
+   468→          <button class="btn" onclick="doUpdateEDI('dry-run')" style="margin-left:auto">Update EDI Profiles</button>
+   469→        </div>
+   470→        <pre id="remediationOutput" style="display:none"></pre>
+   471→      </div>
+   472→    </div>
+   473→
+   474→    <!-- MTTR Panel -->
+   475→    <div class="tab-panel" id="panel-mttr">
+   476→      <div class="section-body">
+   477→        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+   478→          <button class="btn btn-primary" onclick="loadMTTRReport()">MTTR Report</button>
+   479→          <button class="btn" onclick="loadOpenFindings()">Open Findings</button>
+   480→        </div>
+   481→        <div id="mttrResults"></div>
+   482→        <pre id="mttrOutput" style="margin-top:14px; display:none"></pre>
+   483→      </div>
+   484→    </div>
+   485→
+   486→    <!-- Findings Panel -->
+   487→    <div class="tab-panel" id="panel-findings">
+   488→      <div class="section-body">
+   489→        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+   490→          <button class="btn btn-primary" onclick="loadFindings()">Refresh Findings</button>
+   491→          <button class="btn" onclick="loadPolicies()">Load Policies</button>
+   492→          <button class="btn" onclick="loadReports()">Load Reports</button>
+   493→        </div>
+   494→        <div id="findingsTable"></div>
+   495→        <pre id="findingsOutput" style="margin-top:14px; display:none"></pre>
+   496→      </div>
+   497→    </div>
+   498→
+   499→    <!-- State Machine Panel -->
+   500→    <div class="tab-panel" id="panel-state-machine">
+   501→      <div class="section-body">
+   502→        <div style="display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center">
+   503→          <button class="btn btn-primary" onclick="loadSMDefinition()">Load State Machine</button>
+   504→          <button class="btn" onclick="doTimeoutCheck()">Check Timeouts</button>
+   505→          <span style="margin-left:auto; font-size:12px; color:var(--text-dim)">10 states, 18 transitions, 7 triggers</span>
+   506→        </div>
+   507→
+   508→        <!-- State Flow Visual -->
+   509→        <div id="smFlow" style="margin-bottom:18px; display:none">
+   510→          <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px">State Flow</div>
+   511→          <div class="state-flow" id="smFlowNodes"></div>
+   512→        </div>
+   513→
+   514→        <!-- Transition Explorer -->
+   515→        <div id="smExplorer" style="margin-bottom:18px; display:none">
+   516→          <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px">Transition Explorer</div>
+   517→          <div class="input-row">
+   518→            <div class="input-group" style="max-width:300px">
+   519→              <label>Finding ID</label>
+   520→              <input type="text" id="smFindingId" placeholder="UUID from findings list">
+   521→            </div>
+   522→            <div class="input-group" style="max-width:200px">
+   523→              <label>Target State</label>
+   524→              <select id="smTargetState"><option value="">-- load available --</option></select>
+   525→            </div>
+   526→            <div class="input-group" style="max-width:180px">
+   527→              <label>Trigger</label>
+   528→              <select id="smTrigger"></select>
+   529→            </div>
+   530→            <div class="input-group" style="max-width:180px">
+   531→              <label>Actor</label>
+   532→              <input type="text" id="smActor" value="user:dashboard">
+   533→            </div>
+   534→            <div style="display:flex; gap:8px; padding-bottom:1px">
+   535→              <button class="btn btn-primary" onclick="doTransition()" id="btnTransition" disabled>Transition</button>
+   536→              <button class="btn" onclick="loadTimeline()" id="btnTimeline" disabled>Timeline</button>
+   537→            </div>
+   538→          </div>
+   539→          <div id="smTransitionResult"></div>
+   540→        </div>
+   541→
+   542→        <!-- States Table -->
+   543→        <div id="smStatesTable" style="display:none"></div>
+   544→
+   545→        <!-- Timeline -->
+   546→        <div id="smTimeline" style="display:none">
+   547→          <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px">Transition Timeline</div>
+   548→          <div class="timeline" id="smTimelineContent"></div>
+   549→        </div>
+   550→
+   551→        <pre id="smOutput" style="margin-top:14px; display:none"></pre>
+   552→      </div>
+   553→    </div>
+   554→
+   555→    <!-- Event Bus Panel -->
+   556→    <div class="tab-panel" id="panel-event-bus">
+   557→      <div class="section-body">
+   558→        <div style="display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center">
+   559→          <button class="btn btn-primary" onclick="loadEventBusData()">Refresh Event Bus</button>
+   560→          <button class="btn" onclick="publishTestEvent()">Publish Test Event</button>
+   561→          <span style="margin-left:auto; font-size:12px; color:var(--text-dim)">GET /api/v1/events/stats, /api/v1/events, /api/v1/reactions/rules</span>
+   562→        </div>
+   563→
+   564→        <!-- Event Bus Stats -->
+   565→        <div id="ebStatsRow" class="stats-row" style="margin-bottom:18px"></div>
+   566→
+   567→        <!-- Sub-tabs for events/rules/log -->
+   568→        <div class="tabs" style="margin-bottom:0; padding:0">
+   569→          <button class="tab active" data-ebtab="events" onclick="switchEbTab('events')">Recent Events</button>
+   570→          <button class="tab" data-ebtab="rules" onclick="switchEbTab('rules')">Reaction Rules</button>
+   571→          <button class="tab" data-ebtab="reactions" onclick="switchEbTab('reactions')">Reaction Log</button>
+   572→        </div>
+   573→        <div id="ebPanelEvents" class="section-body" style="border: 1px solid var(--border); border-top:none; border-radius: 0 0 var(--radius) var(--radius)"></div>
+   574→        <div id="ebPanelRules" class="section-body" style="display:none; border: 1px solid var(--border); border-top:none; border-radius: 0 0 var(--radius) var(--radius)"></div>
+   575→        <div id="ebPanelReactions" class="section-body" style="display:none; border: 1px solid var(--border); border-top:none; border-radius: 0 0 var(--radius) var(--radius)"></div>
+   576→
+   577→        <pre id="ebOutput" style="margin-top:14px; display:none"></pre>
+   578→      </div>
+   579→    </div>
+   580→
+   581→  </div>
+   582→</div>
+   583→
+   584→<div class="toast" id="toast"></div>
+   585→
+   586→<script>
+   587→const API = window.location.origin;
+   588→
+   589→// ── Toast ──────────────────────────────────
+   590→function toast(msg, type='') {
+   591→  const el = document.getElementById('toast');
+   592→  el.textContent = msg;
+   593→  el.className = 'toast show ' + type;
+   594→  setTimeout(() => el.className = 'toast', 4000);
+   595→}
+   596→
+   597→// ── Tabs ───────────────────────────────────
+   598→function switchTab(name) {
+   599→  document.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+   600→  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+   601→  // Auto-load data for specific tabs
+   602→  if (name === 'connectivity') loadConnectivity();
+   603→  if (name === 'state-machine') loadSMDefinition();
+   604→  if (name === 'event-bus') loadEventBusData();
+   605→}
+   606→document.querySelectorAll('.tab[data-tab]').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+   607→
+   608→// Event bus sub-tabs
+   609→function switchEbTab(name) {
+   610→  document.querySelectorAll('.tab[data-ebtab]').forEach(t => t.classList.toggle('active', t.dataset.ebtab === name));
+   611→  document.getElementById('ebPanelEvents').style.display = name === 'events' ? 'block' : 'none';
+   612→  document.getElementById('ebPanelRules').style.display = name === 'rules' ? 'block' : 'none';
+   613→  document.getElementById('ebPanelReactions').style.display = name === 'reactions' ? 'block' : 'none';
+   614→}
+   615→
+   616→// ── Health / Stats ────────────────────────
+   617→async function loadHealth() {
+   618→  try {
+   619→    const r = await fetch(API + '/health');
+   620→    const d = await r.json();
+   621→    const tools = d.tools || {};
+   622→    const dot = document.getElementById('statusDot');
+   623→    const txt = document.getElementById('statusText');
+   624→    const allUp = Object.values(tools).every(v => v === 'ok');
+   625→    dot.className = 'status-dot' + (allUp ? '' : ' degraded');
+   626→    txt.textContent = allUp ? 'All systems operational' : 'MTTR tracker unreachable';
+   627→  } catch(e) {
+   628→    document.getElementById('statusDot').className = 'status-dot down';
+   629→    document.getElementById('statusText').textContent = 'Gateway unreachable';
+   630→  }
+   631→}
+   632→
+   633→async function loadStats() {
+   634→  try {
+   635→    const [fRes, pRes, polRes] = await Promise.all([
+   636→      fetch(API + '/api/v1/findings?limit=1'),
+   637→      fetch(API + '/api/v1/audit/profiles'),
+   638→      fetch(API + '/api/v1/policies?limit=1'),
+   639→    ]);
+   640→    const fData = await fRes.json();
+   641→    const pData = await pRes.json();
+   642→    const polData = await polRes.json();
+   643→
+   644→    const openRes = await fetch(API + '/api/v1/findings?status=open&limit=1');
+   645→    const openData = await openRes.json();
+   646→    document.getElementById('statFindings').textContent = openData.total;
+   647→    document.getElementById('statProfiles').textContent = pData.length;
+   648→    document.getElementById('statPolicies').textContent = polData.total;
+   649→  } catch(e) { /* gateway may be starting */ }
+   650→
+   651→  try {
+   652→    const mRes = await fetch(API + '/api/v1/mttr/report');
+   653→    const mData = await mRes.json();
+   654→    document.getElementById('statMTTR').textContent = mData.avg_mttr_hours?.toFixed(1) || '--';
+   655→  } catch(e) { /* MTTR tracker may be down */ }
+   656→
+   657→  try {
+   658→    const ebRes = await fetch(API + '/api/v1/events/stats');
+   659→    const ebData = await ebRes.json();
+   660→    document.getElementById('statEvents').textContent = ebData.total_events || 0;
+   661→  } catch(e) {}
+   662→
+   663→  try {
+   664→    const reRes = await fetch(API + '/api/v1/reactions/stats');
+   665→    const reData = await reRes.json();
+   666→    document.getElementById('statReactions').textContent = reData.total_actions_executed || 0;
+   667→  } catch(e) {}
+   668→}
+   669→
+   670→// ══════════════════════════════════════════════════════════════════════
+   671→//  CONNECTIVITY
+   672→// ══════════════════════════════════════════════════════════════════════
+   673→async function loadConnectivity() {
+   674→  const spinner = document.getElementById('connSpinner');
+   675→  spinner.style.display = 'inline-block';
+   676→  try {
+   677→    const r = await fetch(API + '/api/v1/system/connectivity');
+   678→    const d = await r.json();
+   679→
+   680→    document.getElementById('connTimestamp').textContent = 'Last check: ' + d.timestamp;
+   681→
+   682→    // Overall status
+   683→    const overallClass = d.status === 'ok' ? 'ok' : d.status === 'degraded' ? 'degraded' : 'unavailable';
+   684→    document.getElementById('connOverall').innerHTML = `
+   685→      <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px">
+   686→        <span class="badge badge-${overallClass}">${d.status.toUpperCase()}</span>
+   687→        <span style="font-size:13px">Gateway v${d.gateway_version}  |  ${d.active_routes} active routes</span>
+   688→      </div>
+   689→    `;
+   690→
+   691→    // Component cards
+   692→    const icons = {
+   693→      database: '🗃️', anonymiser: '🔒', ner_detector: '🧠', auditor: '🔍',
+   694→      remediation: '🔧', mttr_tracker: '📊', query_registry: '📋',
+   695→      state_machine: '⚙️', event_bus: '📡', reaction_engine: '⚡'
+   696→    };
+   697→
+   698→    let html = '';
+   699→    for (const [key, comp] of Object.entries(d.components)) {
+   700→      const icon = icons[key] || '📌';
+   701→      const latency = comp.latency_ms != null ? `<div class="conn-latency">${comp.latency_ms} ms</div>` : '';
+   702→      const detail = comp.detail ? `<div class="conn-detail">${comp.detail}</div>` : '';
+   703→      html += `
+   704→        <div class="conn-card ${comp.status}">
+   705→          <div class="conn-icon">${icon}</div>
+   706→          <div>
+   707→            <div class="conn-name">${comp.name} <span class="badge badge-${comp.status}">${comp.status}</span></div>
+   708→            ${detail}${latency}
+   709→          </div>
+   710→        </div>
+   711→      `;
+   712→    }
+   713→    document.getElementById('connGrid').innerHTML = html;
+   714→
+   715→    // Update header status
+   716→    const dot = document.getElementById('statusDot');
+   717→    const txt = document.getElementById('statusText');
+   718→    dot.className = 'status-dot' + (d.status === 'ok' ? '' : d.status === 'degraded' ? ' degraded' : ' down');
+   719→    const okCount = Object.values(d.components).filter(c => c.status === 'ok').length;
+   720→    txt.textContent = `${okCount}/${Object.keys(d.components).length} components operational`;
+   721→
+   722→    toast('Connectivity check complete', d.status === 'ok' ? 'success' : '');
+   723→  } catch(e) {
+   724→    toast('Connectivity check failed: ' + e.message, 'error');
+   725→  } finally {
+   726→    spinner.style.display = 'none';
+   727→  }
+   728→}
+   729→
+   730→// ══════════════════════════════════════════════════════════════════════
+   731→//  STATE MACHINE
+   732→// ══════════════════════════════════════════════════════════════════════
+   733→let smDef = null;
+   734→
+   735→async function loadSMDefinition() {
+   736→  try {
+   737→    const r = await fetch(API + '/api/v1/state-machine/definition');
+   738→    smDef = await r.json();
+   739→
+   740→    // State flow visual
+   741→    document.getElementById('smFlow').style.display = 'block';
+   742→    document.getElementById('smExplorer').style.display = 'block';
+   743→    document.getElementById('smStatesTable').style.display = 'block';
+   744→
+   745→    const flowOrder = ['detected','triaged','assigned','in_remediation','awaiting_verification','verified','closed'];
+   746→    const branchStates = [{s:'escalated',from:'assigned'},{s:'false_positive',from:'triaged'},{s:'risk_accepted',from:'triaged'}];
+   747→    let flowHtml = '';
+   748→    flowOrder.forEach((s, i) => {
+   749→      flowHtml += `<div class="state-node badge-${s}">${s.replace(/_/g,' ')}</div>`;
+   750→      if (i < flowOrder.length - 1) flowHtml += '<div class="state-arrow">→</div>';
+   751→    });
+   752→    // Show branch states
+   753→    flowHtml += '  <span style="color:var(--text-dim); font-size:12px; margin-left:12px">Branches:</span>';
+   754→    branchStates.forEach(b => {
+   755→      flowHtml += ` <div class="state-node badge-${b.s}" style="font-size:10px; padding:4px 10px">${b.s.replace(/_/g,' ')}</div>`;
+   756→    });
+   757→    document.getElementById('smFlowNodes').innerHTML = flowHtml;
+   758→
+   759→    // States table with transitions
+   760→    let tableHtml = '<table><tr><th>State</th><th>Valid Transitions</th><th>Triggers</th><th>Sign-off Required</th><th>Timeouts (CRIT/HIGH/MED)</th></tr>';
+   761→    for (const state of smDef.states) {
+   762→      const transNames = state.transitions.map(t => t.to_state.replace(/_/g,' ')).join(', ') || '—';
+   763→      const triggers = state.transitions.flatMap(t => t.triggers).join(', ') || '—';
+   764→      const signoff = state.transitions.some(t => t.requires_sign_off) ? '⚠️ Yes' : '—';
+   765→      const tos = state.timeouts_hours;
+   766→      const timeoutStr = tos ? `${tos.critical || '—'}h / ${tos.high || '—'}h / ${tos.medium || '—'}h` : '—';
+   767→      tableHtml += `<tr>
+   768→        <td><span class="badge badge-${state.name}">${state.name.replace(/_/g,' ')}</span></td>
+   769→        <td style="font-size:12px">${transNames}</td>
+   770→        <td style="font-size:11px; color:var(--text-dim)">${triggers}</td>
+   771→        <td>${signoff}</td>
+   772→        <td style="font-family:monospace; font-size:12px">${timeoutStr}</td>
+   773→      </tr>`;
+   774→    }
+   775→    tableHtml += '</table>';
+   776→    document.getElementById('smStatesTable').innerHTML = tableHtml;
+   777→
+   778→    // Enable finding explorer
+   779→    document.getElementById('btnTransition').disabled = false;
+   780→    document.getElementById('btnTimeline').disabled = false;
+   781→
+   782→    toast(`State machine loaded: ${smDef.total_states} states, ${smDef.total_transitions} transitions`, 'success');
+   783→  } catch(e) {
+   784→    toast('Failed to load state machine: ' + e.message, 'error');
+   785→  }
+   786→}
+   787→
+   788→async function loadAvailableTransitions() {
+   789→  const findingId = document.getElementById('smFindingId').value.trim();
+   790→  if (!findingId) return;
+   791→  try {
+   792→    const r = await fetch(API + `/api/v1/state-machine/transitions/${findingId}/available`);
+   793→    const d = await r.json();
+   794→    const sel = document.getElementById('smTargetState');
+   795→    const trigSel = document.getElementById('smTrigger');
+   796→    sel.innerHTML = `<option value="">-- current: ${d.current_state} --</option>`;
+   797→    trigSel.innerHTML = '';
+   798→    for (const t of d.transitions) {
+   799→      sel.innerHTML += `<option value="${t.to_state}">${t.to_state.replace(/_/g,' ')} (${t.description})</option>`;
+   800→    }
+   801→    sel.onchange = () => {
+   802→      const selected = d.transitions.find(t => t.to_state === sel.value);
+   803→      if (selected) {
+   804→        trigSel.innerHTML = selected.triggers.map(tr => `<option value="${tr}">${tr}</option>`).join('');
+   805→      }
+   806→    };
+   807→    toast(`Loaded transitions for ${d.current_state}`, 'success');
+   808→  } catch(e) {
+   809→    toast('Failed: ' + e.message, 'error');
+   810→  }
+   811→}
+   812→
+   813→async function doTransition() {
+   814→  const findingId = document.getElementById('smFindingId').value.trim();
+   815→  const targetState = document.getElementById('smTargetState').value;
+   816→  const trigger = document.getElementById('smTrigger').value;
+   817→  const actor = document.getElementById('smActor').value;
+   818→  if (!findingId || !targetState || !trigger) { toast('Fill in finding ID, target state, and trigger', 'error'); return; }
+   819→
+   820→  try {
+   821→    const r = await fetch(API + `/api/v1/state-machine/transitions/${findingId}`, {
+   822→      method: 'POST',
+   823→      headers: {'Content-Type': 'application/json'},
+   824→      body: JSON.stringify({ target_state: targetState, trigger, actor, context: {} })
+   825→    });
+   826→    const d = await r.json();
+   827→    const color = d.success ? 'var(--green)' : 'var(--red)';
+   828→    document.getElementById('smTransitionResult').innerHTML = `
+   829→      <div style="padding:14px; background:var(--navy-light); border:1px solid ${color}; border-radius:7px; margin-bottom:12px">
+   830→        <div style="font-weight:600; color:${color}; margin-bottom:6px">${d.success ? 'Transition Successful' : 'Transition Failed'}</div>
+   831→        <div style="font-size:12px; font-family:monospace">
+   832→          ${d.from_state} → ${d.to_state} | trigger: ${d.trigger} | actor: ${d.actor}<br>
+   833→          ${d.error ? 'Error: ' + d.error : ''}
+   834→          ${d.guard_failed ? 'GUARD CONDITION FAILED' : ''}
+   835→          ${d.auto_escalated ? 'AUTO-ESCALATED' : ''}
+   836→          ${d.timeout_hours ? 'Timeout: ' + d.timeout_hours + 'h' : ''}
+   837→        </div>
+   838→      </div>
+   839→    `;
+   840→    toast(d.success ? `Transitioned to ${d.to_state}` : `Failed: ${d.error}`, d.success ? 'success' : 'error');
+   841→  } catch(e) {
+   842→    toast('Transition error: ' + e.message, 'error');
+   843→  }
+   844→}
+   845→
+   846→async function loadTimeline() {
+   847→  const findingId = document.getElementById('smFindingId').value.trim();
+   848→  if (!findingId) return;
+   849→  try {
+   850→    const r = await fetch(API + `/api/v1/state-machine/transitions/${findingId}/timeline`);
+   851→    const d = await r.json();
+   852→    document.getElementById('smTimeline').style.display = 'block';
+   853→    if (d.transitions.length === 0) {
+   854→      document.getElementById('smTimelineContent').innerHTML = '<div class="empty">No transitions recorded for this finding</div>';
+   855→      return;
+   856→    }
+   857→    let html = '';
+   858→    for (const t of d.transitions) {
+   859→      const cls = t.to_state === 'escalated' ? 'escalated' : t.to_state === 'verified' ? 'verified' : '';
+   860→      html += `
+   861→        <div class="tl-item ${cls}">
+   862→          <div class="tl-from">${t.from_state} → <span class="tl-to">${t.to_state}</span></div>
+   863→          <div class="tl-meta">
+   864→            Trigger: ${t.trigger} | Actor: ${t.actor} | ${t.transitioned_at}
+   865→            ${t.auto_escalated ? '| AUTO-ESCALATED' : ''}
+   866→            ${t.guard_failed ? '| GUARD FAILED' : ''}
+   867→            ${t.timeout_hours ? '| Timeout: ' + t.timeout_hours + 'h' : ''}
+   868→          </div>
+   869→          ${Object.keys(t.context_payload || {}).length > 0 ? `<pre style="margin-top:6px; padding:8px; font-size:10px; max-height:100px">${JSON.stringify(t.context_payload, null, 2)}</pre>` : ''}
+   870→        </div>
+   871→      `;
+   872→    }
+   873→    document.getElementById('smTimelineContent').innerHTML = html;
+   874→    toast(`Timeline: ${d.total_transitions} transitions`, 'success');
+   875→  } catch(e) {
+   876→    toast('Timeline error: ' + e.message, 'error');
+   877→  }
+   878→}
+   879→
+   880→async function doTimeoutCheck() {
+   881→  try {
+   882→    const r = await fetch(API + '/api/v1/state-machine/timeout-check', { method: 'POST' });
+   883→    const d = await r.json();
+   884→    toast(`Checked ${d.findings_checked} findings, ${d.auto_escalated} auto-escalated`, d.auto_escalated > 0 ? '' : 'success');
+   885→    if (d.auto_escalated > 0) {
+   886→      showOutput('smOutput', d);
+   887→    }
+   888→  } catch(e) {
+   889→    toast('Timeout check error: ' + e.message, 'error');
+   890→  }
+   891→}
+   892→
+   893→// Auto-load available transitions when finding ID is entered
+   894→document.getElementById('smFindingId')?.addEventListener('change', loadAvailableTransitions);
+   895→
+   896→// ══════════════════════════════════════════════════════════════════════
+   897→//  EVENT BUS
+   898→// ══════════════════════════════════════════════════════════════════════
+   899→async function loadEventBusData() {
+   900→  try {
+   901→    const [statsRes, eventsRes, rulesRes] = await Promise.all([
+   902→      fetch(API + '/api/v1/events/stats'),
+   903→      fetch(API + '/api/v1/events?limit=30'),
+   904→      fetch(API + '/api/v1/reactions/rules?include_disabled=true'),
+   905→    ]);
+   906→    const stats = await statsRes.json();
+   907→    const events = await eventsRes.json();
+   908→    const rules = await rulesRes.json();
+   909→
+   910→    // Stats row
+   911→    document.getElementById('ebStatsRow').innerHTML = `
+   912→      <div class="stat-card"><div class="stat-label">Total Events</div><div class="stat-value info">${stats.total_events}</div></div>
+   913→      <div class="stat-card"><div class="stat-label">Published</div><div class="stat-value ok">${stats.events_published}</div></div>
+   914→      <div class="stat-card"><div class="stat-label">Processed</div><div class="stat-value ok">${stats.events_processed}</div></div>
+   915→      <div class="stat-card"><div class="stat-label">Queue Depth</div><div class="stat-value high">${stats.queue_depth}</div></div>
+   916→      <div class="stat-card"><div class="stat-label">Transport</div><div class="stat-value" style="font-size:16px; color:var(--cyan)">${stats.transport}</div></div>
+   917→      <div class="stat-card"><div class="stat-label">Running</div><div class="stat-value ${stats.running ? 'ok' : 'high'}">${stats.running ? 'Yes' : 'No'}</div></div>
+   918→    `;
+   919→
+   920→    // Events table
+   921→    if (events.length === 0) {
+   922→      document.getElementById('ebPanelEvents').innerHTML = '<div class="empty">No events yet. Run an audit or publish a test event.</div>';
+   923→    } else {
+   924→      let html = '<table><tr><th>Type</th><th>Source</th><th>Correlation ID</th><th>Timestamp</th><th>Payload (key fields)</th></tr>';
+   925→      for (const e of events) {
+   926→        const payloadKeys = Object.entries(e.payload || {}).slice(0, 3).map(([k,v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' | ');
+   927→        const isReaction = e.event_type === 'reaction.triggered';
+   928→        html += `<tr>
+   929→          <td><span class="evt-tag ${isReaction ? 'reaction' : ''}">${e.event_type}</span></td>
+   930→          <td style="font-size:12px">${e.source}</td>
+   931→          <td style="font-size:11px; color:var(--text-dim); font-family:monospace">${(e.correlation_id || '').slice(0,12)}...</td>
+   932→          <td style="font-size:11px; color:var(--text-dim)">${(e.timestamp || '').slice(0,19)}</td>
+   933→          <td style="font-size:11px; max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${payloadKeys}</td>
+   934→        </tr>`;
+   935→      }
+   936→      html += '</table>';
+   937→      document.getElementById('ebPanelEvents').innerHTML = html;
+   938→    }
+   939→
+   940→    // Rules
+   941→    let rulesHtml = '';
+   942→    for (const rule of rules) {
+   943→      rulesHtml += `
+   944→        <div class="rule-card">
+   945→          <div class="rule-priority">P${rule.priority}</div>
+   946→          <div class="rule-info">
+   947→            <div class="rule-name">${rule.name} ${rule.is_builtin ? '<span style="font-size:10px;color:var(--text-dim)">[builtin]</span>' : ''}</div>
+   948→            <div class="rule-desc">${rule.description}</div>
+   949→            <div class="rule-count">Events: ${rule.event_types.join(', ')} | Fired: ${rule.action_count}x | Last: ${rule.last_triggered ? rule.last_triggered.slice(0,19) : 'never'}</div>
+   950→          </div>
+   951→          <label class="toggle-switch">
+   952→            <input type="checkbox" ${rule.enabled ? 'checked' : ''} onchange="toggleRule('${rule.rule_id}', this.checked)">
+   953→            <span class="toggle-slider"></span>
+   954→          </label>
+   955→        </div>
+   956→      `;
+   957→    }
+   958→    document.getElementById('ebPanelRules').innerHTML = rulesHtml || '<div class="empty">No reaction rules loaded</div>';
+   959→
+   960→    toast(`Event bus: ${stats.total_events} events, ${rules.length} rules`, 'success');
+   961→  } catch(e) {
+   962→    toast('Event bus load error: ' + e.message, 'error');
+   963→  }
+   964→}
+   965→
+   966→async function toggleRule(ruleId, enabled) {
+   967→  try {
+   968→    await fetch(API + `/api/v1/reactions/rules/${ruleId}/toggle?enabled=${enabled}`, { method: 'PUT' });
+   969→    toast(`Rule ${ruleId} ${enabled ? 'enabled' : 'disabled'}`, 'success');
+   970→  } catch(e) {
+   971→    toast('Toggle failed: ' + e.message, 'error');
+   972→  }
+   973→}
+   974→
+   975→async function publishTestEvent() {
+   976→  try {
+   977→    const r = await fetch(API + '/api/v1/events/publish', {
+   978→      method: 'POST',
+   979→      headers: {'Content-Type': 'application/json'},
+   980→      body: JSON.stringify({
+   981→        event_type: 'finding.created',
+   982→        payload: {
+   983→          finding_id: 'test-' + Date.now(),
+   984→          finding_ref: 'TEST-001',
+   985→          severity: 'critical',
+   986→          risk_category: 'pii_exposure',
+   987→          title: 'Test event from dashboard'
+   988→        },
+   989→        source: 'dashboard',
+   990→        correlation_id: 'test-' + Date.now(),
+   991→      })
+   992→    });
+   993→    const d = await r.json();
+   994→    toast(`Test event published: ${d.event_id}`, 'success');
+   995→    loadEventBusData();
+   996→  } catch(e) {
+   997→    toast('Publish failed: ' + e.message, 'error');
+   998→  }
+   999→}
+  1000→
+  1001→// ══════════════════════════════════════════════════════════════════════
+  1002→//  ANONYMISER
+  1003→// ══════════════════════════════════════════════════════════════════════
+  1004→async function doScan() {
+  1005→  const manifest = JSON.parse(document.getElementById('manifestInput').value);
+  1006→  const r = await fetch(API + '/api/v1/anonymise/scan', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({manifest}) });
+  1007→  const d = await r.json();
+  1008→  showOutput('anonymiserOutput', d);
+  1009→  toast(`Scan complete: ${d.pii_fields_found} PII fields found`, 'success');
+  1010→}
+  1011→
+  1012→async function doAnonymise() {
+  1013→  const manifestId = document.getElementById('manifestId').value || 'BL-TEST-001';
+  1014→  const manifest = JSON.parse(document.getElementById('manifestInput').value);
+  1015→  const r = await fetch(API + '/api/v1/anonymise/manifest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({manifest_id: manifestId, manifest}) });
+  1016→  const d = await r.json();
+  1017→  showOutput('anonymiserOutput', d);
+  1018→  toast(`Anonymised ${d.fields_processed} PII fields`, 'success');
+  1019→  loadStats();
+  1020→}
+  1021→
+  1022→// ── Auditor ────────────────────────────────
+  1023→async function doRunAudit(domain) {
+  1024→  const body = domain ? {domain} : null;
+  1025→  const r = await fetch(API + '/api/v1/audit/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
+  1026→  const d = await r.json();
+  1027→  showOutput('auditOutput', d);
+  1028→  toast(`Audit complete: ${d.findings_count} findings from ${d.queries_executed} queries`, d.findings_count > 0 ? '' : 'success');
+  1029→  loadStats();
+  1030→}
+  1031→
+  1032→async function loadProfiles() {
+  1033→  const r = await fetch(API + '/api/v1/audit/profiles');
+  1034→  const d = await r.json();
+  1035→  let html = '<table><tr><th>Partner</th><th>Standard</th><th>Encryption</th><th>Protocol</th><th>Status</th></tr>';
+  1036→  for (const p of d) {
+  1037→    html += `<tr>
+  1038→      <td>${p.partner_name}</td>
+  1039→      <td>${p.edi_standard || '-'}</td>
+  1040→      <td>${p.encryption_enabled ? 'Yes' : 'No'}</td>
+  1041→      <td>${p.encryption_protocol || '-'}</td>
+  1042→      <td><span class="badge ${p.compliant ? 'compliant' : 'non-compliant'}">${p.compliant ? 'Compliant' : 'Non-Compliant'}</span></td>
+  1043→    </tr>`;
+  1044→  }
+  1045→  html += '</table>';
+  1046→  document.getElementById('auditResults').innerHTML = html || '<div class="empty">No EDI profiles found</div>';
+  1047→}
+  1048→
+  1049→// ── Remediation ────────────────────────────
+  1050→async function doGeneratePolicies(mode) {
+  1051→  const r = await fetch(API + '/api/v1/remediation/policies', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode}) });
+  1052→  const d = await r.json();
+  1053→  showOutput('remediationOutput', d);
+  1054→  toast(`${d.policies_generated} policies generated (${mode})`, 'success');
+  1055→  loadStats();
+  1056→}
+  1057→
+  1058→async function doUpdateEDI(mode) {
+  1059→  const r = await fetch(API + '/api/v1/remediation/edi-profiles', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode: mode || 'dry-run'}) });
+  1060→  const d = await r.json();
+  1061→  showOutput('remediationOutput', d);
+  1062→  toast(`${d.profiles_processed} profiles processed (${mode})`, 'success');
+  1063→}
+  1064→
+  1065→// ── MTTR ───────────────────────────────────
+  1066→async function loadMTTRReport() {
+  1067→  const r = await fetch(API + '/api/v1/mttr/report');
+  1068→  const d = await r.json();
+  1069→  let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+  1070→    <div class="stat-card"><div class="stat-label">Total Findings</div><div class="stat-value info">${d.total_findings}</div></div>
+  1071→    <div class="stat-card"><div class="stat-label">Avg MTTR</div><div class="stat-value high">${d.avg_mttr_hours?.toFixed(1)}h</div></div>
+  1072→    <div class="stat-card"><div class="stat-label">P95 MTTR</div><div class="stat-value critical">${d.p95_mttr_hours?.toFixed(1)}h</div></div>
+  1073→  </div>`;
+  1074→  document.getElementById('mttrResults').innerHTML = html;
+  1075→  showOutput('mttrOutput', d);
+  1076→}
+  1077→
+  1078→async function loadOpenFindings() {
+  1079→  const r = await fetch(API + '/api/v1/mttr/open');
+  1080→  const d = await r.json();
+  1081→  let html = '<table><tr><th>Finding</th><th>Severity</th><th>Category</th><th>MTTR (h)</th><th>Phase</th><th>Age (h)</th></tr>';
+  1082→  for (const f of d) {
+  1083→    html += `<tr>
+  1084→      <td>${f.finding_ref}</td>
+  1085→      <td><span class="badge badge-${f.severity}">${f.severity}</span></td>
+  1086→      <td>${f.risk_category}</td>
+  1087→      <td>${f.mttr_hours?.toFixed(1)}</td>
+  1088→      <td>${f.current_phase}</td>
+  1089→      <td>${f.age_hours?.toFixed(1)}</td>
+  1090→    </tr>`;
+  1091→  }
+  1092→  html += '</table>';
+  1093→  document.getElementById('mttrResults').innerHTML = html || '<div class="empty">No open findings</div>';
+  1094→}
+  1095→
+  1096→// ── Findings / Policies / Reports ───────────
+  1097→async function loadFindings() {
+  1098→  const r = await fetch(API + '/api/v1/findings?limit=100');
+  1099→  const d = await r.json();
+  1100→  let html = '<table><tr><th>Ref</th><th>Severity</th><th>State</th><th>Category</th><th>Title</th><th>Detected</th></tr>';
+  1101→  for (const f of d.findings) {
+  1102→    const state = f.state || f.status;
+  1103→    html += `<tr>
+  1104→      <td>${f.finding_ref}</td>
+  1105→      <td><span class="badge badge-${f.severity}">${f.severity}</span></td>
+  1106→      <td><span class="badge badge-${state}">${state}</span></td>
+  1107→      <td>${f.risk_category}</td>
+  1108→      <td>${f.title}</td>
+  1109→      <td>${f.detected_at?.slice(0,19)}</td>
+  1110→    </tr>`;
+  1111→  }
+  1112→  html += '</table>';
+  1113→  document.getElementById('findingsTable').innerHTML = d.total > 0 ? html : '<div class="empty">No findings recorded. Run an audit first.</div>';
+  1114→}
+  1115→
+  1116→async function loadPolicies() {
+  1117→  const r = await fetch(API + '/api/v1/policies?limit=100');
+  1118→  const d = await r.json();
+  1119→  let html = '<table><tr><th>Name</th><th>Field</th><th>Action</th><th>Category</th><th>Enabled</th><th>GDPR</th></tr>';
+  1120→  for (const p of d.policies) {
+  1121→    html += `<tr>
+  1122→      <td>${p.name}</td>
+  1123→      <td>${p.field_name}</td>
+  1124→      <td>${p.action}</td>
+  1125→      <td>${p.field_category}</td>
+  1126→      <td>${p.enabled ? 'Yes' : 'No'}</td>
+  1127→      <td>${p.gdpr_article || '-'}</td>
+  1128→    </tr>`;
+  1129→  }
+  1130→  html += '</table>';
+  1131→  document.getElementById('findingsTable').innerHTML = d.total > 0 ? html : '<div class="empty">No policies. Generate from open findings.</div>';
+  1132→}
+  1133→
+  1134→async function loadReports() {
+  1135→  const r = await fetch(API + '/api/v1/reports');
+  1136→  const d = await r.json();
+  1137→  let html = '<table><tr><th>Period</th><th>Total</th><th>Critical</th><th>High</th><th>Remediated</th><th>Avg MTTR</th></tr>';
+  1138→  for (const rp of d) {
+  1139→    html += `<tr>
+  1140→      <td>${rp.report_period_start?.slice(0,10)} — ${rp.report_period_end?.slice(0,10)}</td>
+  1141→      <td>${rp.total_findings}</td>
+  1142→      <td>${rp.critical_count}</td>
+  1143→      <td>${rp.high_count}</td>
+  1144→      <td>${rp.remediated_count}</td>
+  1145→      <td>${rp.avg_mttr_hours?.toFixed(1)}h</td>
+  1146→    </tr>`;
+  1147→  }
+  1148→  html += '</table>';
+  1149→  document.getElementById('findingsTable').innerHTML = d.length > 0 ? html : '<div class="empty">No reports generated yet.</div>';
+  1150→}
+  1151→
+  1152→// ── Helpers ────────────────────────────────
+  1153→function showOutput(id, data) {
+  1154→  const el = document.getElementById(id);
+  1155→  el.style.display = 'block';
+  1156→  el.textContent = JSON.stringify(data, null, 2);
+  1157→}
+  1158→
+  1159→// ── Init ───────────────────────────────────
+  1160→loadHealth();
+  1161→loadStats();
+  1162→setInterval(loadHealth, 15000);
+  1163→</script>
+  1164→</body>
+  1165→</html>

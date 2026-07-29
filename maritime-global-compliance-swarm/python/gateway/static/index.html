@@ -163,7 +163,73 @@
   .badge-ok { background: rgba(13,214,144,0.15); color: var(--green); }
   .badge-degraded { background: rgba(240,180,41,0.15); color: var(--amber); }
   .badge-unavailable { background: rgba(229,72,77,0.15); color: var(--red); }
+  .badge-error { background: rgba(229,72,77,0.15); color: var(--red); }
   .badge-detected { background: rgba(229,72,77,0.15); color: var(--red); }
+
+  /* ── Backend Status Panel ──────────────── */
+  .backend-status-banner {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px; border-radius: 8px;
+    font-size: 13px; font-weight: 500;
+    margin-bottom: 18px; transition: all 0.3s;
+    border: 1px solid var(--border);
+  }
+  .backend-status-banner.operational {
+    background: rgba(13,214,144,0.08);
+    border-color: rgba(13,214,144,0.25);
+  }
+  .backend-status-banner.degraded {
+    background: rgba(240,180,41,0.08);
+    border-color: rgba(240,180,41,0.25);
+  }
+  .backend-status-banner.down {
+    background: rgba(229,72,77,0.08);
+    border-color: rgba(229,72,77,0.25);
+  }
+  .backend-status-banner .bsb-icon {
+    width: 10px; height: 10px; border-radius: 50%;
+    animation: bsb-pulse 2s infinite;
+  }
+  .backend-status-banner.operational .bsb-icon { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .backend-status-banner.degraded .bsb-icon { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .backend-status-banner.down .bsb-icon { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  @keyframes bsb-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .backend-status-banner .bsb-count {
+    margin-left: auto; font-size: 12px; color: var(--text-dim);
+  }
+  .bs-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px; margin-top: 14px;
+  }
+  .bs-card {
+    background: var(--navy-light); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+    transition: border-color 0.2s, transform 0.15s;
+  }
+  .bs-card:hover { border-color: var(--blue); transform: translateY(-1px); }
+  .bs-card .bs-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; flex-shrink: 0;
+  }
+  .bs-card .bs-icon.ok { background: rgba(13,214,144,0.12); }
+  .bs-card .bs-icon.degraded { background: rgba(240,180,41,0.12); }
+  .bs-card .bs-icon.unavailable { background: rgba(229,72,77,0.12); }
+  .bs-card .bs-icon.error { background: rgba(229,72,77,0.12); }
+  .bs-card .bs-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .bs-card .bs-detail { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+  .bs-card .bs-badge {
+    margin-left: auto; flex-shrink: 0;
+  }
+  .bs-endpoint {
+    font-size: 11px; color: var(--text-dim); font-family: monospace;
+    background: var(--navy); padding: 2px 8px; border-radius: 4px;
+    margin-top: 10px; display: inline-block;
+  }
   .badge-triaged { background: rgba(240,180,41,0.15); color: var(--amber); }
   .badge-assigned { background: rgba(27,109,212,0.15); color: var(--blue); }
   .badge-in_remediation { background: rgba(167,139,250,0.15); color: var(--purple); }
@@ -358,6 +424,7 @@
   <div class="section">
     <div class="tabs">
       <button class="tab active" data-tab="tools">Tools</button>
+      <button class="tab" data-tab="backend-status">Backend Status</button>
       <button class="tab" data-tab="connectivity">Connectivity</button>
       <button class="tab" data-tab="anonymiser">Anonymiser</button>
       <button class="tab" data-tab="auditor">Auditor</button>
@@ -403,6 +470,24 @@
             <span class="tool-tag python">Python</span>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Backend Status Panel -->
+    <div class="tab-panel" id="panel-backend-status">
+      <div class="section-body">
+        <!-- Live banner -->
+        <div class="backend-status-banner" id="bsBanner">
+          <div class="bsb-icon"></div>
+          <span id="bsBannerText">Checking backend services...</span>
+          <span class="bsb-count" id="bsBannerCount"></span>
+        </div>
+        <span class="bs-endpoint">GET /api/v1/system/frontend-status</span>
+        <!-- Service cards grid -->
+        <div class="bs-grid" id="bsGrid">
+          <div style="color:var(--text-dim); font-size:13px; grid-column:1/-1">Loading service statuses...</div>
+        </div>
+        <div style="margin-top:14px; font-size:12px; color:var(--text-dim)" id="bsTimestamp"></div>
       </div>
     </div>
 
@@ -600,6 +685,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
   // Auto-load data for specific tabs
   if (name === 'connectivity') loadConnectivity();
+  if (name === 'backend-status') loadBackendStatus();
   if (name === 'state-machine') loadSMDefinition();
   if (name === 'event-bus') loadEventBusData();
 }
@@ -1156,10 +1242,82 @@ function showOutput(id, data) {
   el.textContent = JSON.stringify(data, null, 2);
 }
 
+// ══════════════════════════════════════════════════════════
+//  BACKEND STATUS (frontend ↔ backend communication proof)
+// ══════════════════════════════════════════════════════════
+const BS_ICONS = {
+  database: '\u{1F5C3}\uFE0F', state_machine: '\u2699\uFE0F', event_bus: '\u{1F4E1}',
+  reaction_engine: '\u26A1', anonymiser: '\u{1F512}', ner_detector: '\u{1F9E0}',
+  auditor: '\u{1F50D}', remediation: '\u{1F527}', mttr_tracker: '\u{1F4CA}',
+  event_flow: '\u{1F517}'
+};
+const BS_LABELS = {
+  database: 'Database', state_machine: 'State Machine', event_bus: 'Event Bus',
+  reaction_engine: 'Reaction Engine', anonymiser: 'PII Anonymiser', ner_detector: 'NER Detector',
+  auditor: 'EDI Auditor', remediation: 'Remediation Generator', mttr_tracker: 'MTTR Tracker (Go)',
+  event_flow: 'End-to-End Event Flow'
+};
+
+async function loadBackendStatus() {
+  try {
+    const r = await fetch(API + '/api/v1/system/frontend-status');
+    const d = await r.json();
+
+    // Update banner
+    const banner = document.getElementById('bsBanner');
+    banner.className = 'backend-status-banner ' + (d.status === 'operational' ? 'operational' : d.status === 'degraded' ? 'degraded' : 'down');
+    document.getElementById('bsBannerText').textContent = d.status === 'operational'
+      ? 'All backend services operational — frontend communicating successfully'
+      : 'Some backend services degraded';
+
+    const services = d.services || {};
+    const okCount = Object.values(services).filter(s => s.status === 'ok').length;
+    const totalCount = Object.keys(services).length;
+    document.getElementById('bsBannerCount').textContent = `${okCount} / ${totalCount} services OK`;
+
+    // Update header status dot + text
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    if (d.status === 'operational') {
+      dot.className = 'status-dot';
+      txt.textContent = `${okCount}/${totalCount} services connected`;
+    } else {
+      dot.className = 'status-dot degraded';
+      txt.textContent = `${okCount}/${totalCount} services — degraded`;
+    }
+
+    // Build service cards
+    let html = '';
+    for (const [key, svc] of Object.entries(services)) {
+      const icon = BS_ICONS[key] || '\u{1F4CC}';
+      const label = BS_LABELS[key] || key;
+      const statusCls = svc.status || 'error';
+      html += `
+        <div class="bs-card">
+          <div class="bs-icon ${statusCls}">${icon}</div>
+          <div>
+            <div class="bs-name">${label} <span class="badge badge-${statusCls}">${svc.status}</span></div>
+            <div class="bs-detail">${svc.detail || ''}</div>
+          </div>
+        </div>`;
+    }
+    document.getElementById('bsGrid').innerHTML = html;
+    document.getElementById('bsTimestamp').textContent = 'Last checked: ' + d.timestamp + '  |  Gateway v' + d.gateway_version;
+  } catch(e) {
+    document.getElementById('bsBanner').className = 'backend-status-banner down';
+    document.getElementById('bsBannerText').textContent = 'Cannot reach backend gateway';
+    document.getElementById('bsGrid').innerHTML = '<div style="color:var(--red); font-size:13px">Error: ' + e.message + '</div>';
+    document.getElementById('statusDot').className = 'status-dot down';
+    document.getElementById('statusText').textContent = 'Backend unreachable';
+  }
+}
+
 // ── Init ───────────────────────────────────
 loadHealth();
 loadStats();
+loadBackendStatus();
 setInterval(loadHealth, 15000);
+setInterval(loadBackendStatus, 20000);
 </script>
 </body>
 </html>
