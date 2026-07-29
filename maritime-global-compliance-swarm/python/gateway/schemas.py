@@ -629,3 +629,16 @@ class PublishEventRequest(BaseModel):
     source: str = Field("manual", description="Source of the event")
     correlation_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ErrorResponse(BaseModel):
+    """Generic error response returned by all endpoints on failure."""
+    detail: str = Field(..., description="Human-readable error description")
+    error: Optional[str] = Field(None, description="Machine-readable error code")
+
+
+class HealthResponse(BaseModel):
+    """Health check response confirming gateway and tool availability."""
+    status: str = Field("ok", description="Overall health status")
+    tools: dict[str, str] = Field(default_factory=dict, description="Per-tool status map")
+    gateway_version: str = Field("2.1.0", description="Running gateway version")
