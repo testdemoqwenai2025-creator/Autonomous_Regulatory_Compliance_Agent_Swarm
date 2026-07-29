@@ -1,44 +1,26 @@
 ---
 Task ID: 1
-Agent: Main
-Task: Build Maritime Global Compliance Swarm (Python + Golang)
+Agent: Main Agent
+Task: Implement unified finding lifecycle state machine, event-driven architecture, frontend confirmation endpoint, and push to GitHub
 
 Work Log:
-- Created project structure: python/shared, python/anonymiser, python/edi_auditor, python/remediation, golang/cmd, golang/internal, golang/pkg
-- Built shared config (config.py), ORM models (models.py - 6 tables, 7 enums), database layer (database.py)
-- Built Manifest_PII_Anonymiser: HMAC-SHA256 token vault, Fernet encryptor, multi-jurisdiction rule engine, Click CLI
-- Built Logistics_EDI_SQL_Auditor: 11 parametric SQL queries across 5 compliance domains, finding persister, EDI profile scanner
-- Built Remediation_Route_Generator: decision matrix, policy generator (dry-run/staged/apply), EDI profile updater
-- Built Telemetry_MTTR_Tracker (Golang): buffered event engine, HTTP API, SQLite+Postgres support
-- Created Operational Workflow Diagram (Mermaid + rendered PNG via Playwright+CSS)
-- Docker setup: 2 Dockerfiles, docker-compose with PostGIS, .env.example
-- Makefile with 15+ targets, GitHub Actions CI pipeline
-- Full README with architecture diagram, CLI reference, compliance domain mapping
+- Read all existing source files to assess current state
+- Found models.py already has FindingState (10 states), FindingTransition, EventLog tables
+- Found state_machine.py fully implemented: 20 transitions, guard conditions, timeout rules, check_timeouts()
+- Found event_bus.py fully implemented: publish/subscribe, EventStore, PG LISTEN/NOTIFY, background consumer
+- Found reactions.py fully implemented: 7 built-in reaction rules with conditions and actions
+- Found /api/v1/system/connectivity endpoint already exists with 10-component diagnostics
+- Added SM->EventBus callback bridge in create_app() that auto-emits finding.state_changed on every transition
+- Added SM->Go MTTR bridge (_forward_sm_event_to_mttr) that forwards transitions to Go service via HTTP
+- Added /api/v1/system/frontend-status endpoint for lightweight frontend confirmation
+- Extended Go MTTR models from 5 to 10 phases (triaged, escalated, risk_accepted, closed, false_positive)
+- Added FindingStateToPhase mapping table and /api/v1/events/sm endpoint in Go API
+- Updated computeMTTRHours to accept 'verified' as MTTR endpoint
+- Updated README.md with new endpoint docs, bridge architecture, and expanded phase model
+- Committed and pushed all changes to GitHub
 
 Stage Summary:
-- Complete maritime compliance swarm with 4 tools across Python (3) and Golang (1)
-- Project located at: /home/z/my-project/maritime-global-compliance-swarm/
-- 20+ source files, 11 audit queries, 5 compliance domains, 5 supported jurisdictions
-
----
-Task ID: 2
-Agent: Main
-Task: Add Python FastAPI gateway for frontend endpoint access
-
-Work Log:
-- Created python/gateway/ module: schemas.py (30+ Pydantic models), app.py (FastAPI factory with 20 routes), __main__.py
-- Wired all 4 tools into unified REST API: PII Anonymiser, EDI Auditor, Remediation Generator, MTTR Tracker (proxy to Go)
-- Fixed SQLAlchemy reserved attribute bug (metadata -> meta_data in MTTRTrackingEvent model)
-- Fixed Python regex inline flag bug ((?i) -> re.IGNORECASE in rules.py)
-- Rewrote edi_updater.py which was corrupted (single-line file from prior session)
-- Updated requirements.txt (added fastapi, uvicorn, httpx)
-- Updated docker-compose.yml (added gateway service, restructured on-demand tools under profiles)
-- Updated Makefile (added gateway, gateway-prod, docker-up-all targets; fixed PYTHONPATH for all targets)
-- Updated .env.example (added MTTR_TRACKER_URL, GATEWAY_PORT)
-- Smoke tested: all endpoints return correct responses
-
-Stage Summary:
-- 20 REST routes across 4 tool namespaces + shared query endpoints
-- Gateway runs on port 8000, proxies MTTR calls to Golang on port 8080
-- Auto-generated OpenAPI docs at /docs and /redoc
-- Start with: make gateway (dev) or docker compose up --build (prod)
+- All core modules (state_machine, event_bus, reactions, models) were already complete
+- Key new additions: frontend-status endpoint, SM->EventBus callback, SM->Go MTTR bridge, Go 10-phase model
+- Frontend confirmation endpoint: GET /api/v1/system/frontend-status (tests 10 services + event flow proof)
+- Pushed to: https://github.com/testdemoqwenai2025-creator/Autonomous_Regulatory_Compliance_Agent_Swarm

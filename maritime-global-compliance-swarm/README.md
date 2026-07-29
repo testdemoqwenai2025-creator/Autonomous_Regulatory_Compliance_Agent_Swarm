@@ -102,7 +102,8 @@ The FastAPI gateway exposes all tools plus the state machine, event bus, and rea
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Liveness probe — status of all tools |
-| GET | `/api/v1/system/connectivity` | Full connectivity diagnostics for frontend (10 components) |
+| GET | `/api/v1/system/connectivity` | Full connectivity diagnostics for frontend (10 components, latency ms) |
+| GET | `/api/v1/system/frontend-status` | **Frontend confirmation endpoint** — lightweight status of all services + end-to-end event flow proof |
 
 ### 1. PII Anonymiser
 
@@ -244,7 +245,8 @@ Frontend / Middleware / External System
 | **MTTR Proxy** | Gateway proxies `/api/v1/mttr/*` → `Go:8080` | Transparent language boundary |
 | **CORS** | `Access-Control-Allow-Origin` configurable | SPA, mobile apps |
 | **OpenAPI** | Auto-generated at `/docs` | API exploration, codegen |
-| **Connectivity Check** | `GET /api/v1/system/connectivity` | Frontend confirms backend health |
+| **Connectivity Check** | `GET /api/v1/system/connectivity` | Frontend confirms backend health (verbose, latency per component) |
+| **Frontend Status** | `GET /api/v1/system/frontend-status` | Lightweight confirmation for UI status bar + end-to-end event flow proof |
 
 ### Frontend Middleware Communication Guide
 
@@ -279,6 +281,9 @@ Golang MTTR Tracker (port 8080)
 - MTTR routes proxy transparently — the frontend never needs to know about the Golang service
 - The Python SDK (`python/client/`) provides typed models for all request/response shapes
 - **Connectivity endpoint** (`GET /api/v1/system/connectivity`) tests all 10 components with latency measurements — call this first from any frontend to confirm backend communication
+- **Frontend status endpoint** (`GET /api/v1/system/frontend-status`) returns a lightweight JSON summary designed for UI status bars, including an end-to-end event flow proof that publishes a real event and confirms it processes through the subscriber pipeline
+- **SM→EventBus bridge**: Every successful state machine transition auto-emits a `finding.state_changed` event to the event bus via a registered callback, triggering reaction rules immediately
+- **SM→Go MTTR bridge**: Every successful state machine transition also forwards the mapped Go phase to the Golang MTTR tracker via HTTP (`POST /api/v1/events/sm`), keeping telemetry in sync
 
 ### Interactive Dashboard
 
@@ -341,8 +346,8 @@ api.close()
 | **Manifest_PII_Anonymiser** | Python | HMAC-SHA256 deterministic tokenisation, Fernet encryption, multi-jurisdiction rules (GDPR, CCPA, LGPD, PDPA, PIPA), ML NER (spaCy) |
 | **Logistics_EDI_SQL_Auditor** | Python | 11 parametric SQL queries, 5 compliance domains, pluggable query registry, finding persistence |
 | **Remediation_Route_Generator** | Python | Decision matrix mapping risk categories to masking actions, EDI profile updater, state machine integration |
-| **Telemetry_MTTR_Tracker** | Golang | Buffered event ingestion with background flush, MTTR avg/P95 metrics |
-| **Finding State Machine** | Python | 10-state lifecycle with guard conditions, timeout SLAs, audit trail, legacy bridge |
+| **Telemetry_MTTR_Tracker** | Golang | Buffered event ingestion, 10-phase lifecycle model, SM event endpoint, MTTR avg/P95 metrics |
+| **Finding State Machine** | Python | 10-state lifecycle with guard conditions, timeout SLAs, audit trail, legacy bridge, auto-emit callback |
 | **Event Bus** | Python | Database-backed event store, PostgreSQL LISTEN/NOTIFY, in-process queue (dev) |
 | **Reaction Engine** | Python | 7 autonomous reaction rules, priority-based evaluation, runtime toggle |
 | **API Gateway + Dashboard** | Python (FastAPI) | Unified REST API (30+ routes), static HTML dashboard, OpenAPI docs |
@@ -387,8 +392,8 @@ make docker-down      # Stop all Docker services
 
 | Service | Port | Description |
 |---------|------|-------------|
-| `gateway` | 8000 | FastAPI gateway + HTML dashboard + OpenAPI docs |
-| `mttr-tracker` | 8080 | Golang MTTR telemetry service |
+| `gateway` | 8000 | FastAPI gateway + HTML dashboard + OpenAPI docs + state machine bridge |
+| `mttr-tracker` | 8080 | Golang MTTR telemetry service (10-phase model, SM event ingestion) |
 | `db` | 5432 | PostgreSQL 16 + PostGIS 3.4 |
 | `anonymiser` | — | One-shot PII anonymisation (profile: `tools`) |
 | `auditor` | — | One-shot EDI audit (profile: `tools`) |
@@ -421,7 +426,7 @@ maritime-global-compliance-swarm/
 │   │   ├── edi_updater.py   # EDI profile security updates
 │   │   └── cli.py           # Click CLI
 │   ├── gateway/             # FastAPI gateway
-│   │   ├── app.py           # ★ 30+ REST routes + state machine + event bus
+│   │   ├── app.py           # ★ 30+ REST routes + SM→EventBus bridge + SM→Go MTTR bridge
 │   │   ├── schemas.py       # 50+ Pydantic request/response models
 │   │   └── static/           # HTML dashboard (index.html)
 │   ├── client/              # Python SDK for frontend integration
@@ -435,8 +440,8 @@ maritime-global-compliance-swarm/
 │   │   ├── config/          # Environment configuration
 │   │   ├── models/          # Data structures
 │   │   ├── database/        # DB operations (SQLite + Postgres)
-│   │   └── tracker/         # Buffered event engine
-│   ├── pkg/api/             # HTTP REST API
+│   │   └── tracker/         # Buffered event engine + 10-phase model
+│   ├── pkg/api/             # HTTP REST API + /api/v1/events/sm (state machine ingestion)
 │   ├── go.mod
 │   └── Dockerfile
 ├── docs/
@@ -462,10 +467,10 @@ The swarm operates in 8 phases:
 2. **Detection** — PII rule engine + ML NER classifies fields by jurisdiction
 3. **Tokenisation** — HMAC-SHA256 vault replaces PII with deterministic tokens
 4. **Audit** — 11 SQL queries detect encryption, customs, and EDI violations
-5. **State Machine Governance** — Finding lifecycle managed through 10 validated states with guard conditions and timeout SLAs
+5. **State Machine Governance** — Finding lifecycle managed through 10 validated states with guard conditions, timeout SLAs, and auto-emit callback to event bus
 6. **Event-Driven Reactions** — 7 autonomous rules react to findings (CRITICAL alerts, PII auto-scan, cert checks, timeout escalation)
 7. **Remediation** — Decision matrix auto-generates masking policies and EDI fixes
-8. **Telemetry** — Golang service tracks MTTR across all findings
+8. **Telemetry** — Golang service tracks MTTR across all findings, with automatic phase sync from the state machine bridge
 
 ### Finding State Machine
 
@@ -485,6 +490,7 @@ DETECTED → TRIAGED → ASSIGNED → IN_REMEDIATION → AWAITING_VERIFICATION �
 - **Timeout rules**: CRITICAL = 1hr per state, HIGH = 4hr, MEDIUM = 24hr (configurable per state)
 - **Auto-escalation**: Timeout breaches automatically transition to ESCALATED via timer actor
 - **Audit trail**: Every transition recorded in `finding_transitions` table with trigger, actor, context
+- **Auto-emit callback**: Every successful transition publishes `finding.state_changed` to the event bus and forwards to Go MTTR tracker
 - **Legacy bridge**: Maps old 5-state `AuditStatus` to new 10-state `FindingState` for backward compatibility
 
 ### Event-Driven Reactions
