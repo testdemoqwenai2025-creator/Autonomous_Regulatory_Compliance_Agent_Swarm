@@ -18,6 +18,11 @@ dotenv>=1.0
 pydantic>=2.5
 pydantic-settings>=2.1
 
+# API Gateway
+fastapi>=0.115
+uvicorn[standard]>=0.32
+httpx>=0.27
+
 # Utilities
 datetime>=5.0
 jinja2>=3.1

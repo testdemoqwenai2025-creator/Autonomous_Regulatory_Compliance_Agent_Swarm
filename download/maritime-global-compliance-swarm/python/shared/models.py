@@ -195,7 +195,7 @@ class MTTRTrackingEvent(Base):
     timestamp = Column(DateTime(timezone=True), default=_utcnow, nullable=False, index=True)
     assignee = Column(String(64), nullable=True)
     duration_seconds = Column(Float, nullable=True)
-    metadata = Column(JSON, default=dict)
+    meta_data = Column(JSON, default=dict)
 
     finding = relationship("AuditFinding")
 

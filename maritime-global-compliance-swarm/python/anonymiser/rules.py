@@ -39,7 +39,7 @@ DEFAULT_RULES: list[PIIRule] = [
     PIIRule(
         field_pattern=r"consignee_(name|address|email|phone|fax|tax_id)",
         category="consignee_identity",
-        regex=re.compile(r"^(?i)consignee"),
+        regex=re.compile(r"^consignee", re.IGNORECASE),
         jurisdictions=[Jurisdiction.GDPR, Jurisdiction.CCPA, Jurisdiction.LGPD],
         retention_max_days=90,
         description="Consignee personal identifiers in Bill of Lading",
@@ -47,7 +47,7 @@ DEFAULT_RULES: list[PIIRule] = [
     PIIRule(
         field_pattern=r"shipper_(name|address|email|phone|fax|tax_id)",
         category="shipper_identity",
-        regex=re.compile(r"^(?i)shipper"),
+        regex=re.compile(r"^shipper", re.IGNORECASE),
         jurisdictions=[Jurisdiction.GDPR, Jurisdiction.CCPA, Jurisdiction.LGPD],
         retention_max_days=90,
         description="Shipper personal identifiers in Bill of Lading",

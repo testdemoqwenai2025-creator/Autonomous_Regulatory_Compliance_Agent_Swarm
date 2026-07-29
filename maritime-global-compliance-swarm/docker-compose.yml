@@ -1,5 +1,6 @@
 # Maritime Global Compliance Swarm
-# docker-compose up --build
+# docker-compose up --build          # start gateway + DB + MTTR tracker
+# docker-compose --profile tools up   # also run one-shot CLI tools
 
 services:
   # ── Database ──────────────────────────────────────
@@ -19,6 +20,49 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── API Gateway (Python FastAPI) ─────────────────
+  gateway:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DB_DRIVER: postgresql+psycopg2
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: maritime_compliance
+      DB_USER: postgres
+      DB_PASSWORD: mysecretpassword
+      MTTR_TRACKER_URL: http://mttr-tracker:8080
+      GATEWAY_PORT: "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mttr-tracker:
+        condition: service_started
+    command: ["python", "-m", "gateway"]
+
+  # ── MTTR Tracker (Golang) ─────────────────────────
+  mttr-tracker:
+    build:
+      context: ./golang
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DB_DRIVER: postgresql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: maritime_compliance
+      DB_USER: postgres
+      DB_PASSWORD: mysecretpassword
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
   # ── PII Anonymiser (Python) ────────────────────────
   anonymiser:
     build:
@@ -31,7 +75,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["anonymise", "--manifest", "/data/manifests/sample.json", "--dry-run"]
+    command: ["python", "-m", "anonymiser.cli", "anonymise", "--manifest", "/data/manifests/sample.json", "--dry-run"]
     profiles:
       - tools
 
@@ -62,18 +106,6 @@ services:
     command: ["generate-policies", "--mode", "dry-run"]
     profiles:
       - tools
-
-  # ── MTTR Tracker (Golang) ─────────────────────────
-  mttr-tracker:
-    build:
-      context: ./golang
-      dockerfile: Dockerfile
-    env_file: .env
-    ports:
-      - "8080:8080"
-    depends_on:
-      db:
-        condition: service_healthy
 
 volumes:
   pgdata:
