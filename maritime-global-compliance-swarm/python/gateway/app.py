@@ -22,9 +22,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from pathlib import Path
+
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import Field
 
 from shared.config import SwarmConfig
@@ -161,6 +165,15 @@ def create_app(config: Optional[SwarmConfig] = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Serve static frontend
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+        @app.get("/", include_in_schema=False, tags=["frontend"])
+        async def serve_frontend():
+            return FileResponse(str(static_dir / "index.html"))
 
     # ── Register routers ──────────────────────────────────────────────
 

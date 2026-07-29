@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maritime Compliance Swarm</title>
+<style>
+  :root {
+    --navy: #0b1426;
+    --navy-light: #131d35;
+    --blue: #1e6dd4;
+    --blue-glow: #2b82ff;
+    --cyan: #00c9db;
+    --green: #0dd690;
+    --amber: #f0b429;
+    --red: #e5484d;
+    --text: #e2e8f0;
+    --text-dim: #7b8ba3;
+    --card: #162038;
+    --card-hover: #1c2a4a;
+    --border: #233054;
+    --radius: 10px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--navy);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── Header ────────────────────────────── */
+  header {
+    background: var(--navy-light);
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo-area { display: flex; align-items: center; gap: 14px; }
+
+  .logo-icon {
+    width: 42px; height: 42px;
+    background: linear-gradient(135deg, var(--blue), var(--cyan));
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 800; color: #fff;
+  }
+
+  .logo-text h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+  .logo-text span { font-size: 12px; color: var(--text-dim); }
+
+  .header-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text-dim);
+  }
+
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+  }
+
+  .status-dot.degraded { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .status-dot.down { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  /* ── Layout ────────────────────────────── */
+  .container { max-width: 1400px; margin: 0 auto; padding: 28px 32px; }
+
+  /* ── Stats row ─────────────────────────── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    transition: border-color 0.2s;
+  }
+  .stat-card:hover { border-color: var(--blue); }
+
+  .stat-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .stat-value { font-size: 32px; font-weight: 700; }
+  .stat-value.critical { color: var(--red); }
+  .stat-value.high { color: var(--amber); }
+  .stat-value.ok { color: var(--green); }
+  .stat-value.info { color: var(--cyan); }
+
+  /* ── Sections ───────────────────────────── */
+  .section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 24px;
+    overflow: hidden;
+  }
+
+  .section-header {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .section-header h2 { font-size: 15px; font-weight: 600; }
+
+  .section-body { padding: 18px 22px; }
+
+  /* ── Buttons ────────────────────────────── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--navy-light);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .btn:hover { background: var(--card-hover); border-color: var(--blue); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-primary {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--blue-glow); }
+
+  .btn-danger { border-color: var(--red); color: var(--red); }
+  .btn-danger:hover { background: rgba(229,72,77,0.12); }
+
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+
+  /* ── Tables ─────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 12px; color: var(--text-dim); font-weight: 500; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ── Badges ─────────────────────────────── */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .badge-critical { background: rgba(229,72,77,0.15); color: var(--red); }
+  .badge-high { background: rgba(240,180,41,0.15); color: var(--amber); }
+  .badge-medium { background: rgba(27,109,212,0.15); color: var(--blue); }
+  .badge-low { background: rgba(125,139,163,0.15); color: var(--text-dim); }
+  .badge-open { background: rgba(229,72,77,0.15); color: var(--red); }
+  .badge-remediated { background: rgba(13,214,144,0.15); color: var(--green); }
+  .badge-in_progress { background: rgba(240,180,41,0.15); color: var(--amber); }
+  .badge-compliant { background: rgba(13,214,144,0.15); color: var(--green); }
+  .badge-non-compliant { background: rgba(229,72,77,0.15); color: var(--red); }
+
+  /* ── Code / JSON ────────────────────────── */
+  pre, code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+  }
+  pre {
+    background: var(--navy);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 16px;
+    overflow-x: auto;
+    max-height: 400px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* ── Tabs ───────────────────────────────── */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 22px; }
+  .tab {
+    padding: 12px 18px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    font-family: inherit;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ── Textarea ───────────────────────────── */
+  textarea, input[type="text"] {
+    width: 100%;
+    background: var(--navy);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    resize: vertical;
+  }
+  textarea:focus, input:focus { outline: none; border-color: var(--blue); }
+
+  .input-row { display: flex; gap: 12px; margin-bottom: 14px; align-items: flex-end; }
+  .input-group { flex: 1; }
+  .input-group label { display: block; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+
+  /* ── Empty state ────────────────────────── */
+  .empty { padding: 40px 22px; text-align: center; color: var(--text-dim); font-size: 13px; }
+
+  /* ── Toast ──────────────────────────────── */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 13px;
+    z-index: 9999;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    display: none;
+  }
+  .toast.show { display: block; }
+  .toast.error { border-color: var(--red); }
+  .toast.success { border-color: var(--green); }
+
+  /* ── Loading ────────────────────────────── */
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Tool grid ──────────────────────────── */
+  .tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .tool-card {
+    background: var(--navy-light);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tool-card:hover { border-color: var(--blue); transform: translateY(-2px); }
+  .tool-card h3 { font-size: 14px; margin-bottom: 6px; }
+  .tool-card p { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+  .tool-tag { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 4px; margin-top: 10px; font-weight: 600; text-transform: uppercase; }
+  .tool-tag.python { background: rgba(27,109,212,0.15); color: var(--blue); }
+  .tool-tag.golang { background: rgba(0,201,219,0.15); color: var(--cyan); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-area">
+    <div class="logo-icon">CS</div>
+    <div class="logo-text">
+      <h1>Maritime Compliance Swarm</h1>
+      <span>Global Data Governance & Privacy Automation</span>
+    </div>
+  </div>
+  <div class="header-status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Checking...</span>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Stats Row -->
+  <div class="stats-row" id="statsRow">
+    <div class="stat-card">
+      <div class="stat-label">Open Findings</div>
+      <div class="stat-value critical" id="statFindings">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg MTTR (hrs)</div>
+      <div class="stat-value high" id="statMTTR">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">EDI Profiles</div>
+      <div class="stat-value info" id="statProfiles">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Active Policies</div>
+      <div class="stat-value ok" id="statPolicies">--</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="section">
+    <div class="tabs">
+      <button class="tab active" data-tab="tools">Tools</button>
+      <button class="tab" data-tab="anonymiser">Anonymiser</button>
+      <button class="tab" data-tab="auditor">Auditor</button>
+      <button class="tab" data-tab="remediation">Remediation</button>
+      <button class="tab" data-tab="mttr">MTTR Tracker</button>
+      <button class="tab" data-tab="findings">Findings</button>
+    </div>
+
+    <!-- Tools Overview -->
+    <div class="tab-panel active" id="panel-tools">
+      <div class="section-body">
+        <div class="tool-grid">
+          <div class="tool-card" onclick="switchTab('anonymiser')">
+            <h3>1. PII Anonymiser</h3>
+            <p>HMAC-SHA256 deterministic tokenisation, Fernet encryption, multi-jurisdiction rules (GDPR, CCPA, LGPD, PDPA, PIPA).</p>
+            <span class="tool-tag python">Python</span>
+          </div>
+          <div class="tool-card" onclick="switchTab('auditor')">
+            <h3>2. EDI SQL Auditor</h3>
+            <p>11 parametric SQL queries across 5 compliance domains: encryption, customs, EDI format, retention, access control.</p>
+            <span class="tool-tag python">Python</span>
+          </div>
+          <div class="tool-card" onclick="switchTab('remediation')">
+            <h3>3. Remediation Generator</h3>
+            <p>Decision matrix maps risk categories to policy actions. Supports dry-run, staged, and apply modes.</p>
+            <span class="tool-tag python">Python</span>
+          </div>
+          <div class="tool-card" onclick="switchTab('mttr')">
+            <h3>4. MTTR Tracker</h3>
+            <p>Buffered event ingestion with background flush. Tracks finding lifecycle phases with avg/P95 metrics.</p>
+            <span class="tool-tag golang">Golang</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Anonymiser Panel -->
+    <div class="tab-panel" id="panel-anonymiser">
+      <div class="section-body">
+        <div class="input-row">
+          <div class="input-group" style="max-width:240px">
+            <label>Manifest ID</label>
+            <input type="text" id="manifestId" placeholder="BL-SINGAPORE-001">
+          </div>
+          <div style="display:flex; gap:8px; padding-bottom:1px">
+            <button class="btn" onclick="doScan()">Scan PII</button>
+            <button class="btn btn-primary" onclick="doAnonymise()">Anonymise</button>
+          </div>
+        </div>
+        <textarea id="manifestInput" rows="10" placeholder='{"consignee_name": "John Doe", "consignee_email": "john@shipping.com", "consignee_phone": "+44 20 7946 0958", "passport_number": "AB1234567", "container_id": "MSKU1234567", "voyage_number": "V2025-042"}'></textarea>
+        <pre id="anonymiserOutput" style="margin-top:14px; display:none"></pre>
+      </div>
+    </div>
+
+    <!-- Auditor Panel -->
+    <div class="tab-panel" id="panel-auditor">
+      <div class="section-body">
+        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="doRunAudit(null)">Run All Audits</button>
+          <button class="btn" onclick="doRunAudit('encryption')">Encryption</button>
+          <button class="btn" onclick="doRunAudit('customs_documentation')">Customs</button>
+          <button class="btn" onclick="doRunAudit('edi_format')">EDI Format</button>
+          <button class="btn" onclick="doRunAudit('data_retention')">Data Retention</button>
+          <button class="btn" onclick="doRunAudit('access_control')">Access Control</button>
+          <button class="btn" onclick="loadProfiles()" style="margin-left:auto">Load EDI Profiles</button>
+        </div>
+        <div id="auditResults"></div>
+        <pre id="auditOutput" style="margin-top:14px; display:none"></pre>
+      </div>
+    </div>
+
+    <!-- Remediation Panel -->
+    <div class="tab-panel" id="panel-remediation">
+      <div class="section-body">
+        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+          <button class="btn" onclick="doGeneratePolicies('dry-run')">Generate Policies (Dry-Run)</button>
+          <button class="btn" onclick="doGeneratePolicies('staged')">Generate Policies (Staged)</button>
+          <button class="btn btn-danger" onclick="doGeneratePolicies('apply')">Apply Policies</button>
+          <button class="btn" onclick="doUpdateEDI('dry-run')" style="margin-left:auto">Update EDI Profiles</button>
+        </div>
+        <pre id="remediationOutput" style="display:none"></pre>
+      </div>
+    </div>
+
+    <!-- MTTR Panel -->
+    <div class="tab-panel" id="panel-mttr">
+      <div class="section-body">
+        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="loadMTTRReport()">MTTR Report</button>
+          <button class="btn" onclick="loadOpenFindings()">Open Findings</button>
+        </div>
+        <div id="mttrResults"></div>
+        <pre id="mttrOutput" style="margin-top:14px; display:none"></pre>
+      </div>
+    </div>
+
+    <!-- Findings Panel -->
+    <div class="tab-panel" id="panel-findings">
+      <div class="section-body">
+        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="loadFindings()">Refresh Findings</button>
+          <button class="btn" onclick="loadPolicies()">Load Policies</button>
+          <button class="btn" onclick="loadReports()">Load Reports</button>
+        </div>
+        <div id="findingsTable"></div>
+        <pre id="findingsOutput" style="margin-top:14px; display:none"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = window.location.origin;
+
+// ── Toast ──────────────────────────────────
+function toast(msg, type='') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  setTimeout(() => el.className = 'toast', 4000);
+}
+
+// ── Tabs ───────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+}
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+// ── Health / Stats ────────────────────────
+async function loadHealth() {
+  try {
+    const r = await fetch(API + '/health');
+    const d = await r.json();
+    const tools = d.tools || {};
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    const allUp = Object.values(tools).every(v => v === 'ok');
+    dot.className = 'status-dot' + (allUp ? '' : ' degraded');
+    txt.textContent = allUp ? 'All systems operational' : 'MTTR tracker unreachable';
+  } catch(e) {
+    document.getElementById('statusDot').className = 'status-dot down';
+    document.getElementById('statusText').textContent = 'Gateway unreachable';
+  }
+}
+
+async function loadStats() {
+  try {
+    const [fRes, pRes, polRes] = await Promise.all([
+      fetch(API + '/api/v1/findings?limit=1'),
+      fetch(API + '/api/v1/audit/profiles'),
+      fetch(API + '/api/v1/policies?limit=1'),
+    ]);
+    const fData = await fRes.json();
+    const pData = await pRes.json();
+    const polData = await polRes.json();
+    document.getElementById('statFindings').textContent = fData.total;
+    document.getElementById('statProfiles').textContent = pData.length;
+    document.getElementById('statPolicies').textContent = polData.total;
+
+    // Count open for stat
+    const openRes = await fetch(API + '/api/v1/findings?status=open&limit=1');
+    const openData = await openRes.json();
+    document.getElementById('statFindings').textContent = openData.total;
+  } catch(e) { /* gateway may be starting */ }
+
+  try {
+    const mRes = await fetch(API + '/api/v1/mttr/report');
+    const mData = await mRes.json();
+    document.getElementById('statMTTR').textContent = mData.avg_mttr_hours?.toFixed(1) || '--';
+  } catch(e) { /* MTTR tracker may be down */ }
+}
+
+// ── Anonymiser ─────────────────────────────
+async function doScan() {
+  const manifest = JSON.parse(document.getElementById('manifestInput').value);
+  const r = await fetch(API + '/api/v1/anonymise/scan', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({manifest}) });
+  const d = await r.json();
+  showOutput('anonymiserOutput', d);
+  toast(`Scan complete: ${d.pii_fields_found} PII fields found`, 'success');
+}
+
+async function doAnonymise() {
+  const manifestId = document.getElementById('manifestId').value || 'BL-TEST-001';
+  const manifest = JSON.parse(document.getElementById('manifestInput').value);
+  const r = await fetch(API + '/api/v1/anonymise/manifest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({manifest_id: manifestId, manifest}) });
+  const d = await r.json();
+  showOutput('anonymiserOutput', d);
+  toast(`Anonymised ${d.fields_processed} PII fields`, 'success');
+  loadStats();
+}
+
+// ── Auditor ────────────────────────────────
+async function doRunAudit(domain) {
+  const body = domain ? {domain} : null;
+  const r = await fetch(API + '/api/v1/audit/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json();
+  showOutput('auditOutput', d);
+  toast(`Audit complete: ${d.findings_count} findings from ${d.queries_executed} queries`, d.findings_count > 0 ? '' : 'success');
+  loadStats();
+}
+
+async function loadProfiles() {
+  const r = await fetch(API + '/api/v1/audit/profiles');
+  const d = await r.json();
+  let html = '<table><tr><th>Partner</th><th>Standard</th><th>Encryption</th><th>Protocol</th><th>Status</th></tr>';
+  for (const p of d) {
+    html += `<tr>
+      <td>${p.partner_name}</td>
+      <td>${p.edi_standard || '-'}</td>
+      <td>${p.encryption_enabled ? 'Yes' : 'No'}</td>
+      <td>${p.encryption_protocol || '-'}</td>
+      <td><span class="badge ${p.compliant ? 'compliant' : 'non-compliant'}">${p.compliant ? 'Compliant' : 'Non-Compliant'}</span></td>
+    </tr>`;
+  }
+  html += '</table>';
+  document.getElementById('auditResults').innerHTML = html || '<div class="empty">No EDI profiles found</div>';
+}
+
+// ── Remediation ────────────────────────────
+async function doGeneratePolicies(mode) {
+  const r = await fetch(API + '/api/v1/remediation/policies', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode}) });
+  const d = await r.json();
+  showOutput('remediationOutput', d);
+  toast(`${d.policies_generated} policies generated (${mode})`, 'success');
+  loadStats();
+}
+
+async function doUpdateEDI(mode) {
+  const r = await fetch(API + '/api/v1/remediation/edi-profiles', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode: mode || 'dry-run'}) });
+  const d = await r.json();
+  showOutput('remediationOutput', d);
+  toast(`${d.profiles_processed} profiles processed (${mode})`, 'success');
+}
+
+// ── MTTR ───────────────────────────────────
+async function loadMTTRReport() {
+  const r = await fetch(API + '/api/v1/mttr/report');
+  const d = await r.json();
+  let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+    <div class="stat-card"><div class="stat-label">Total Findings</div><div class="stat-value info">${d.total_findings}</div></div>
+    <div class="stat-card"><div class="stat-label">Avg MTTR</div><div class="stat-value high">${d.avg_mttr_hours?.toFixed(1)}h</div></div>
+    <div class="stat-card"><div class="stat-label">P95 MTTR</div><div class="stat-value critical">${d.p95_mttr_hours?.toFixed(1)}h</div></div>
+  </div>`;
+  document.getElementById('mttrResults').innerHTML = html;
+  showOutput('mttrOutput', d);
+}
+
+async function loadOpenFindings() {
+  const r = await fetch(API + '/api/v1/mttr/open');
+  const d = await r.json();
+  let html = '<table><tr><th>Finding</th><th>Severity</th><th>Category</th><th>MTTR (h)</th><th>Phase</th><th>Age (h)</th></tr>';
+  for (const f of d) {
+    html += `<tr>
+      <td>${f.finding_ref}</td>
+      <td><span class="badge badge-${f.severity}">${f.severity}</span></td>
+      <td>${f.risk_category}</td>
+      <td>${f.mttr_hours?.toFixed(1)}</td>
+      <td>${f.current_phase}</td>
+      <td>${f.age_hours?.toFixed(1)}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  document.getElementById('mttrResults').innerHTML = html || '<div class="empty">No open findings</div>';
+}
+
+// ── Findings / Policies / Reports ───────────
+async function loadFindings() {
+  const r = await fetch(API + '/api/v1/findings?limit=100');
+  const d = await r.json();
+  let html = '<table><tr><th>Ref</th><th>Severity</th><th>Status</th><th>Category</th><th>Title</th><th>Detected</th></tr>';
+  for (const f of d.findings) {
+    html += `<tr>
+      <td>${f.finding_ref}</td>
+      <td><span class="badge badge-${f.severity}">${f.severity}</span></td>
+      <td><span class="badge badge-${f.status}">${f.status}</span></td>
+      <td>${f.risk_category}</td>
+      <td>${f.title}</td>
+      <td>${f.detected_at?.slice(0,19)}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  document.getElementById('findingsTable').innerHTML = d.total > 0 ? html : '<div class="empty">No findings recorded. Run an audit first.</div>';
+}
+
+async function loadPolicies() {
+  const r = await fetch(API + '/api/v1/policies?limit=100');
+  const d = await r.json();
+  let html = '<table><tr><th>Name</th><th>Field</th><th>Action</th><th>Category</th><th>Enabled</th><th>GDPR</th></tr>';
+  for (const p of d.policies) {
+    html += `<tr>
+      <td>${p.name}</td>
+      <td>${p.field_name}</td>
+      <td>${p.action}</td>
+      <td>${p.field_category}</td>
+      <td>${p.enabled ? 'Yes' : 'No'}</td>
+      <td>${p.gdpr_article || '-'}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  document.getElementById('findingsTable').innerHTML = d.total > 0 ? html : '<div class="empty">No policies. Generate from open findings.</div>';
+}
+
+async function loadReports() {
+  const r = await fetch(API + '/api/v1/reports');
+  const d = await r.json();
+  let html = '<table><tr><th>Period</th><th>Total</th><th>Critical</th><th>High</th><th>Remediated</th><th>Avg MTTR</th></tr>';
+  for (const rp of d) {
+    html += `<tr>
+      <td>${rp.report_period_start?.slice(0,10)} — ${rp.report_period_end?.slice(0,10)}</td>
+      <td>${rp.total_findings}</td>
+      <td>${rp.critical_count}</td>
+      <td>${rp.high_count}</td>
+      <td>${rp.remediated_count}</td>
+      <td>${rp.avg_mttr_hours?.toFixed(1)}h</td>
+    </tr>`;
+  }
+  html += '</table>';
+  document.getElementById('findingsTable').innerHTML = d.length > 0 ? html : '<div class="empty">No reports generated yet.</div>';
+}
+
+// ── Helpers ────────────────────────────────
+function showOutput(id, data) {
+  const el = document.getElementById(id);
+  el.style.display = 'block';
+  el.textContent = JSON.stringify(data, null, 2);
+}
+
+// ── Init ───────────────────────────────────
+loadHealth();
+loadStats();
+setInterval(loadHealth, 15000);
+</script>
+</body>
+</html>
