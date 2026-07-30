@@ -14,32 +14,42 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  const middlewareStart = new Date().toISOString();
   const requestId = GENERATE_ID();
-  const middlewareTs = new Date().toISOString();
   const clientIp =
     request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     request.headers.get('x-real-ip') ??
     'unknown';
   const userAgent = request.headers.get('user-agent') ?? 'unknown';
 
-  // Clone the request and inject middleware metadata as custom headers
-  // These headers will be readable by the downstream API route handler
+  // Clone the request and inject middleware metadata as custom headers.
+  // These headers will be readable by the downstream API route handler.
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-request-id', requestId);
-  requestHeaders.set('x-middleware-timestamp', middlewareTs);
+  requestHeaders.set('x-middleware-start', middlewareStart);
   requestHeaders.set('x-client-ip', clientIp);
   requestHeaders.set('x-client-user-agent', userAgent);
   requestHeaders.set('x-middleware-hit', 'true');
 
-  // Also set on the response so the browser can see middleware processed it
+  // Build the response
   const response = NextResponse.next({
     request: { headers: requestHeaders },
   });
 
-  // Expose middleware tracking headers to the browser
+  // Capture middleware end time — this runs synchronously before the response
+  // is sent, so it measures the middleware processing duration.
+  const middlewareEnd = new Date().toISOString();
+  const middlewareMs = Math.round(
+    new Date(middlewareEnd).getTime() - new Date(middlewareStart).getTime(),
+  );
+
+  // Expose middleware tracking headers to both the API handler and the browser.
+  // The API handler reads them from request; the browser reads them from response.
   response.headers.set('x-request-id', requestId);
   response.headers.set('x-middleware-hit', 'true');
-  response.headers.set('x-middleware-timestamp', middlewareTs);
+  response.headers.set('x-middleware-start', middlewareStart);
+  response.headers.set('x-middleware-end', middlewareEnd);
+  response.headers.set('x-middleware-ms', String(middlewareMs));
 
   return response;
 }

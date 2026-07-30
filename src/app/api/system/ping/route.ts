@@ -1,269 +1,214 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { PrismaClient } from '@prisma/client';
+
+function freshDb() {
+  return new PrismaClient({ log: ['query'] });
+}
 
 /**
  * GET /api/system/ping
  *
- * This is the unified "full-stack communication" endpoint.
- * It proves the request passed through EVERY layer:
+ * Correlated full-stack trace endpoint.
+ * Reads middleware headers + optional browser client-timing header,
+ * performs instrumented DB reads/writes, persists a CorrelatedTrace,
+ * and returns the full client+server trace.
  *
- *   BROWSER  →  MIDDLEWARE  →  API HANDLER  →  DATABASE  →  API HANDLER  →  BROWSER
- *
- * The middleware injects x-request-id, x-middleware-timestamp,
- * x-client-ip, x-client-user-agent, x-middleware-hit headers.
- * This handler reads those headers, queries/writes the DB, and returns
- * a detailed trace so the frontend (browser) can visualise the entire flow.
+ * ?trace=history  →  returns last 20 stored traces
  */
 export async function GET(request: NextRequest) {
-  const handlerStart = performance.now();
-  const handlerTs = new Date().toISOString();
+  const db = freshDb();
+  const { searchParams } = new URL(request.url);
+  const traceLookupId = searchParams.get('trace');
 
-  // ── 1. Read middleware-injected headers ───────────────────────
-  const requestId =
-    request.headers.get('x-request-id') ?? 'no-middleware';
-  const middlewareTs =
-    request.headers.get('x-middleware-timestamp') ?? 'n/a';
-  const middlewareHit =
-    request.headers.get('x-middleware-hit') ?? 'false';
+  // ── TRACE HISTORY MODE ──
+  if (traceLookupId === 'history') {
+    const traces = await db.correlatedTrace.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    await db.$disconnect();
+    return NextResponse.json({ traces });
+  }
+
+  // ── MAIN PING MODE ──
+  const handlerStart = performance.now();
+  const handlerStartTs = new Date().toISOString();
+
+  const requestId = request.headers.get('x-request-id') ?? 'no-middleware';
+  const mwStart = request.headers.get('x-middleware-start') ?? request.headers.get('x-middleware-timestamp') ?? 'n/a';
+  const mwEnd = request.headers.get('x-middleware-end') ?? 'n/a';
+  const mwHit = request.headers.get('x-middleware-hit') ?? 'false';
+  const mwMs = parseInt(request.headers.get('x-middleware-ms') ?? '0', 10);
   const clientIp = request.headers.get('x-client-ip') ?? 'unknown';
   const userAgent = request.headers.get('x-client-user-agent') ?? 'unknown';
 
-  // ── 2. DATABASE: Write component health checks ───────────────
+  // Read browser client-timing header
+  let clientTiming: Record<string, unknown> | null = null;
+  const clientTimingRaw = request.headers.get('x-client-timing');
+  if (clientTimingRaw) {
+    try { clientTiming = JSON.parse(clientTimingRaw); } catch { /* ignore */ }
+  }
+
+  // DATABASE: writes
   const dbWriteStart = performance.now();
-
-  // Write middleware health
   await db.componentHealth.create({
-    data: {
-      component: 'middleware',
-      status: middlewareHit === 'true' ? 'healthy' : 'degraded',
-      latencyMs: 0,
-      details: JSON.stringify({
-        requestId,
-        middlewareTs,
-        clientIp,
-        middlewareHit,
-      }),
-    },
+    data: { component: 'middleware', status: mwHit === 'true' ? 'healthy' : 'degraded', latencyMs: mwMs, details: JSON.stringify({ requestId, mwStart, mwEnd, mwHit }) },
   });
-
-  // Write API handler health
   await db.componentHealth.create({
-    data: {
-      component: 'api',
-      status: 'healthy',
-      latencyMs: 0,
-      details: JSON.stringify({
-        requestId,
-        handlerTs,
-        endpoint: '/api/system/ping',
-        method: 'GET',
-      }),
-    },
+    data: { component: 'api_handler', status: 'healthy', latencyMs: 0, details: JSON.stringify({ requestId, handlerStartTs, endpoint: '/api/system/ping' }) },
   });
-
   const dbWriteEnd = performance.now();
   const dbWriteMs = Math.round(dbWriteEnd - dbWriteStart);
-  const dbWriteTs = new Date().toISOString();
 
-  // ── 3. DATABASE: Read recent events for stats ────────────────
+  // DATABASE: reads
   const dbReadStart = performance.now();
-
-  const recentEvents = await db.systemEvent.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 5,
-  });
-
+  const recentEvents = await db.systemEvent.findMany({ orderBy: { createdAt: 'desc' }, take: 5 });
   const totalEvents = await db.systemEvent.count();
   const totalHealthChecks = await db.componentHealth.count();
-
-  const healthByComponent = await db.componentHealth.groupBy({
-    by: ['component', 'status'],
-    _count: true,
-    _max: { checkedAt: true },
-  });
-
+  const totalTraces = await db.correlatedTrace.count();
   const dbReadEnd = performance.now();
   const dbReadMs = Math.round(dbReadEnd - dbReadStart);
 
-  // ── 4. DATABASE: Write the full trace as a SystemEvent ───────
+  const handlerEnd = performance.now();
+  const handlerEndTs = new Date().toISOString();
+  const handlerMs = Math.round(handlerEnd - handlerStart);
+
+  // Persist SystemEvent
   await db.systemEvent.create({
     data: {
-      requestId,
-      path: '/api/system/ping',
-      method: 'GET',
-      middlewareTs: middlewareTs !== 'n/a' ? new Date(middlewareTs) : new Date(),
-      handlerTs: new Date(handlerTs),
-      dbWriteTs: new Date(dbWriteTs),
-      dbReadMs,
-      statusCode: 200,
-      clientIp,
-      userAgent,
-      layerTrace: JSON.stringify({
-        browser: 'request_initiated',
-        middleware: middlewareHit === 'true' ? 'intercepted' : 'bypassed',
-        api_handler: 'processed',
-        database_write: 'completed',
-        database_read: 'completed',
-        api_response: 'sent',
-      }),
+      requestId, path: '/api/system/ping', method: 'GET',
+      middlewareTs: mwStart !== 'n/a' ? new Date(mwStart) : new Date(),
+      handlerTs: new Date(handlerStartTs), dbWriteTs: new Date(), dbReadMs,
+      statusCode: 200, clientIp, userAgent,
+      layerTrace: JSON.stringify({ browser: 'request_initiated', middleware: mwHit === 'true' ? 'intercepted' : 'bypassed', api_handler: 'processed', database_write: 'completed', database_read: 'completed', api_response: 'sent' }),
     },
   });
 
-  // ── 5. Build the full response ───────────────────────────────
-  const handlerEnd = performance.now();
-  const totalMs = Math.round(handlerEnd - handlerStart);
+  // Persist CorrelatedTrace
+  let clockDeltaMs = 0;
+  let clientRoundTripMs = 0;
+  let clientTtfbMs = 0;
+  let clientJsonParseMs = 0;
+  let clientRenderStartMs = 0;
+  let clientFetchStart = '';
+  let clientNetworkProtocol = '';
+
+  if (clientTiming) {
+    clientRoundTripMs = (clientTiming.roundTripMs as number) ?? 0;
+    clientTtfbMs = (clientTiming.ttfbMs as number) ?? 0;
+    clientJsonParseMs = (clientTiming.jsonParseMs as number) ?? 0;
+    clientRenderStartMs = (clientTiming.renderStartMs as number) ?? 0;
+    clientFetchStart = (clientTiming.fetchStartIso as string) ?? '';
+    clientNetworkProtocol = (clientTiming.networkProtocol as string) ?? '';
+    if (clientFetchStart) {
+      const clientTtfbInstant = new Date(clientFetchStart).getTime() + clientTtfbMs;
+      clockDeltaMs = Math.round(new Date(handlerStartTs).getTime() - clientTtfbInstant);
+    }
+    await db.correlatedTrace.create({
+      data: {
+        requestId, path: '/api/system/ping', method: 'GET', statusCode: 200,
+        clientFetchStart, clientTtfbMs, clientRoundTripMs, clientJsonParseMs, clientRenderStartMs, clientNetworkProtocol,
+        clientTimingJson: JSON.stringify(clientTiming),
+        serverMiddlewareStartTs: mwStart, serverMiddlewareEndTs: mwEnd, serverMiddlewareMs: mwMs,
+        serverHandlerStartTs: handlerStartTs, serverHandlerEndTs: handlerEndTs, serverHandlerMs: handlerMs,
+        serverDbWriteMs: dbWriteMs, serverDbReadMs: dbReadMs,
+        clientServerDeltaMs: clockDeltaMs, totalEndToEndMs: clientRoundTripMs,
+      },
+    });
+  }
 
   const response = NextResponse.json({
     status: 'ok',
-    message: 'Full-stack communication verified — request passed through all layers',
-
-    // -- Layer-by-layer trace --
-    trace: {
-      browser: {
-        status: 'request_sent',
-        note: 'Your browser initiated this fetch()',
-      },
-      middleware: {
-        status: middlewareHit === 'true' ? 'intercepted' : 'not_intercepted',
-        requestId,
-        timestamp: middlewareTs,
-        clientIp,
-        userAgent: userAgent.slice(0, 80) + (userAgent.length > 80 ? '...' : ''),
-        headersInjected: [
-          'x-request-id',
-          'x-middleware-timestamp',
-          'x-client-ip',
-          'x-client-user-agent',
-          'x-middleware-hit',
-        ],
-      },
-      api_handler: {
-        status: 'processed',
-        endpoint: '/api/system/ping',
-        method: 'GET',
-        timestamp: handlerTs,
-        totalLatencyMs: totalMs,
-      },
-      database: {
-        status: 'read_write_verified',
-        engine: 'SQLite via Prisma ORM',
-        dbWriteLatencyMs: dbWriteMs,
-        dbReadLatencyMs: dbReadMs,
-        recordsWritten: 3,
-        recordsRead: recentEvents.length + 3,
-      },
+    message: 'Correlated full-stack trace — browser + middleware + handler + database',
+    client: clientTiming
+      ? { fetchStart: clientTiming.fetchStartIso, ttfbMs: clientTtfbMs, roundTripMs: clientRoundTripMs, jsonParseMs: clientJsonParseMs, renderStartMs: clientRenderStartMs, networkProtocol: clientNetworkProtocol, navigationType: (clientTiming.navigationType as string) ?? 'n/a', connectionType: (clientTiming.connectionType as string) ?? 'n/a' }
+      : { note: 'No client timing header received. Ensure browser sends x-client-timing.' },
+    server: {
+      middleware: { status: mwHit === 'true' ? 'intercepted' : 'bypassed', startTs: mwStart, endTs: mwEnd, durationMs: mwMs, requestId, clientIp, headersInjected: ['x-request-id', 'x-middleware-start', 'x-middleware-end', 'x-middleware-ms', 'x-client-ip', 'x-middleware-hit'] },
+      handler: { status: 'processed', endpoint: '/api/system/ping', method: 'GET', startTs: handlerStartTs, endTs: handlerEndTs, durationMs: handlerMs },
+      database: { status: 'read_write_verified', engine: 'SQLite via Prisma ORM', writeMs: dbWriteMs, readMs: dbReadMs, recordsWritten: 3, recordsRead: recentEvents.length + 3 },
     },
-
-    // -- Database statistics --
-    stats: {
-      totalTrackedEvents: totalEvents + 1,
-      totalHealthChecks,
-      recentEvents: recentEvents.map((e) => ({
-        id: e.id.slice(-8),
-        path: e.path,
-        method: e.method,
-        statusCode: e.statusCode,
-        dbReadMs: e.dbReadMs,
-        createdAt: e.createdAt.toISOString(),
-      })),
-      healthByComponent,
-    },
-
-    // -- Timing breakdown --
-    timing: {
-      middlewareOverheadMs: middlewareTs !== 'n/a'
-        ? Math.round(new Date(handlerTs).getTime() - new Date(middlewareTs).getTime())
-        : null,
-      dbWriteMs,
-      dbReadMs,
-      totalHandlerMs: totalMs,
-    },
+    correlation: { clockDeltaMs, totalEndToEndMs: clientRoundTripMs || handlerMs, serverTotalMs: handlerMs, browserOverheadMs: clientRoundTripMs ? clientRoundTripMs - handlerMs : null, networkTransitMs: clientTtfbMs ? clientTtfbMs - mwMs - handlerMs : null, tracePersisted: !!clientTiming },
+    stats: { totalTrackedEvents: totalEvents + 1, totalHealthChecks, totalCorrelatedTraces: totalTraces + (clientTiming ? 1 : 0), recentEvents: recentEvents.map((e) => ({ id: e.id.slice(-8), path: e.path, method: e.method, statusCode: e.statusCode, dbReadMs: e.dbReadMs, createdAt: e.createdAt.toISOString() })) },
   });
 
-  // Expose middleware headers on the response for browser inspection
   response.headers.set('x-request-id', requestId);
-  response.headers.set('x-middleware-hit', middlewareHit);
-  response.headers.set('x-middleware-timestamp', middlewareTs);
+  response.headers.set('x-middleware-hit', mwHit);
+  response.headers.set('x-middleware-start', mwStart);
+  response.headers.set('x-middleware-end', mwEnd);
+  response.headers.set('x-middleware-ms', String(mwMs));
+  response.headers.set('x-handler-ms', String(handlerMs));
   response.headers.set('x-db-write-ms', String(dbWriteMs));
   response.headers.set('x-db-read-ms', String(dbReadMs));
 
+  await db.$disconnect();
   return response;
 }
 
-/**
- * POST /api/system/ping
- *
- * Writes a custom event into the database (browser → middleware → API → DB)
- * and returns confirmation with the DB-generated ID proving the write succeeded.
- */
 export async function POST(request: NextRequest) {
-  const handlerTs = new Date().toISOString();
-  const requestId =
-    request.headers.get('x-request-id') ?? 'no-middleware';
-  const middlewareTs =
-    request.headers.get('x-middleware-timestamp') ?? 'n/a';
-  const middlewareHit =
-    request.headers.get('x-middleware-hit') ?? 'false';
+  const db = freshDb();
+  const handlerStartTs = new Date().toISOString();
+  const requestId = request.headers.get('x-request-id') ?? 'no-middleware';
+  const mwStart = request.headers.get('x-middleware-start') ?? 'n/a';
+  const mwEnd = request.headers.get('x-middleware-end') ?? 'n/a';
+  const mwHit = request.headers.get('x-middleware-hit') ?? 'false';
+  const mwMs = parseInt(request.headers.get('x-middleware-ms') ?? '0', 10);
   const clientIp = request.headers.get('x-client-ip') ?? 'unknown';
 
-  let body: Record<string, unknown> = {};
-  try {
-    body = await request.json();
-  } catch {
-    // empty body is fine
+  let clientTiming: Record<string, unknown> | null = null;
+  const clientTimingRaw = request.headers.get('x-client-timing');
+  if (clientTimingRaw) {
+    try { clientTiming = JSON.parse(clientTimingRaw); } catch { /* ignore */ }
   }
 
-  const dbWriteStart = performance.now();
+  let body: Record<string, unknown> = {};
+  try { body = await request.json(); } catch { /* empty */ }
 
-  // Write the event to the database
+  const dbWriteStart = performance.now();
   const created = await db.systemEvent.create({
     data: {
-      requestId,
-      path: '/api/system/ping',
-      method: 'POST',
-      middlewareTs: middlewareTs !== 'n/a' ? new Date(middlewareTs) : new Date(),
-      handlerTs: new Date(handlerTs),
-      dbWriteTs: new Date(),
-      dbReadMs: null,
-      statusCode: 201,
-      clientIp,
+      requestId, path: '/api/system/ping', method: 'POST',
+      middlewareTs: mwStart !== 'n/a' ? new Date(mwStart) : new Date(),
+      handlerTs: new Date(handlerStartTs), dbWriteTs: new Date(), dbReadMs: null, statusCode: 201, clientIp,
       userAgent: request.headers.get('x-client-user-agent') ?? 'unknown',
-      layerTrace: JSON.stringify({
-        browser: 'post_initiated',
-        middleware: middlewareHit === 'true' ? 'intercepted' : 'bypassed',
-        api_handler: 'processed',
-        database_write: 'completed',
-        api_response: 'created',
-      }),
+      layerTrace: JSON.stringify({ browser: 'post_initiated', middleware: mwHit === 'true' ? 'intercepted' : 'bypassed', api_handler: 'processed', database_write: 'completed', api_response: 'created' }),
     },
   });
-
   const dbWriteMs = Math.round(performance.now() - dbWriteStart);
+  const handlerEndTs = new Date().toISOString();
+  const handlerMs = Math.round(new Date(handlerEndTs).getTime() - new Date(handlerStartTs).getTime());
+
+  if (clientTiming) {
+    const roundTripMs = (clientTiming.roundTripMs as number) ?? 0;
+    let clockDeltaMs = 0;
+    const clientFetchStart = (clientTiming.fetchStartIso as string) ?? '';
+    if (clientFetchStart) {
+      const clientTtfbInstant = new Date(clientFetchStart).getTime() + ((clientTiming.ttfbMs as number) ?? 0);
+      clockDeltaMs = Math.round(new Date(handlerStartTs).getTime() - clientTtfbInstant);
+    }
+    await db.correlatedTrace.create({
+      data: {
+        requestId, path: '/api/system/ping', method: 'POST', statusCode: 201,
+        clientFetchStart, clientTtfbMs: (clientTiming.ttfbMs as number) ?? 0, clientRoundTripMs: roundTripMs,
+        clientJsonParseMs: (clientTiming.jsonParseMs as number) ?? 0, clientRenderStartMs: (clientTiming.renderStartMs as number) ?? 0,
+        clientNetworkProtocol: (clientTiming.networkProtocol as string) ?? '',
+        clientTimingJson: JSON.stringify(clientTiming),
+        serverMiddlewareStartTs: mwStart, serverMiddlewareEndTs: mwEnd, serverMiddlewareMs: mwMs,
+        serverHandlerStartTs: handlerStartTs, serverHandlerEndTs: handlerEndTs, serverHandlerMs: handlerMs,
+        serverDbWriteMs: dbWriteMs, serverDbReadMs: 0,
+        clientServerDeltaMs: clockDeltaMs, totalEndToEndMs: roundTripMs,
+      },
+    });
+  }
 
   const response = NextResponse.json(
-    {
-      status: 'created',
-      message: 'Event written to database via full-stack pipeline',
-      event: {
-        id: created.id,
-        requestId,
-        path: created.path,
-        method: created.method,
-        statusCode: created.statusCode,
-        createdAt: created.createdAt.toISOString(),
-      },
-      trace: {
-        middleware: middlewareHit === 'true' ? 'intercepted' : 'bypassed',
-        api_handler: 'processed',
-        database: 'write_confirmed',
-        dbWriteLatencyMs: dbWriteMs,
-      },
-      payload: body,
-    },
+    { status: 'created', message: 'Event + correlated trace written to database', event: { id: created.id, requestId, method: 'POST', statusCode: 201, createdAt: created.createdAt.toISOString() }, serverTimings: { middlewareMs: mwMs, handlerMs, dbWriteMs }, clientTimings: clientTiming ?? { note: 'No client timing header' }, payload: body },
     { status: 201 },
   );
-
   response.headers.set('x-request-id', requestId);
-  response.headers.set('x-middleware-hit', middlewareHit);
+  response.headers.set('x-middleware-hit', mwHit);
+  response.headers.set('x-handler-ms', String(handlerMs));
+
+  await db.$disconnect();
   return response;
 }

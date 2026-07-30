@@ -1,5 +1,5 @@
 // This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// learn more at it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client-js"
@@ -53,4 +53,40 @@ model ComponentHealth {
   latencyMs   Int                  /// response time in ms
   details     String               /// JSON with extra info
   checkedAt   DateTime @default(now())
+}
+
+/// Stores correlated client+server traces for a single request round-trip.
+/// The browser sends its timings in x-client-timing header; the server
+/// appends its own middleware/handler/DB timings and persists the full trace.
+model CorrelatedTrace {
+  id              String   @id @default(cuid())
+  requestId       String              /// matches x-request-id from middleware
+  path            String
+  method          String
+  statusCode      Int
+
+  // -- Client-side (browser) timings --
+  clientFetchStart    String          /// ISO timestamp: when fetch() was called
+  clientTtfbMs         Int             /// Time to First Byte (ms) — measured by browser
+  clientRoundTripMs    Int             /// Total round-trip from fetch() to JSON parsed (ms)
+  clientJsonParseMs    Int             /// Time to parse JSON body (ms)
+  clientRenderStartMs  Int             /// Time from fetch start to React state update (ms)
+  clientNetworkProtocol String         /// e.g. "h2", "http/1.1"
+  clientTimingJson    String          /// Full raw browser timing JSON
+
+  // -- Server-side timings --
+  serverMiddlewareStartTs  String       /// ISO: middleware entry
+  serverMiddlewareEndTs    String       /// ISO: middleware exit
+  serverMiddlewareMs       Int          /// middleware processing time (ms)
+  serverHandlerStartTs     String       /// ISO: API handler entry
+  serverHandlerEndTs       String       /// ISO: API handler exit
+  serverHandlerMs          Int          /// total handler time (ms)
+  serverDbWriteMs          Int          /// DB write latency (ms)
+  serverDbReadMs           Int          /// DB read latency (ms)
+
+  // -- Correlation --
+  clientServerDeltaMs  Int              /// How far apart client & server clocks are (ms)
+  totalEndToEndMs      Int              /// Full client round-trip (authoritative)
+
+  createdAt       DateTime @default(now())
 }
