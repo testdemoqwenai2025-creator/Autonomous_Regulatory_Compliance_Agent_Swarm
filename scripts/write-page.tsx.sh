@@ -1,3 +1,7 @@
+#!/bin/bash
+# This script writes the page.tsx file
+
+cat > /home/z/my-project/src/app/page.tsx << 'ENDOFFILE'
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
@@ -851,3 +855,5 @@ export default function ComplianceDashboard() {
     </div>
   );
 }
+ENDOFFILE
+echo "Done writing page.tsx"

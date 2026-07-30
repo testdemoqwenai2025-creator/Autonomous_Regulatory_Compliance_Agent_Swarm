@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -29,4 +26,31 @@ model Post {
   authorId  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// Tracks every request flowing through the middleware -> API -> DB pipeline
+model SystemEvent {
+  id            String   @id @default(cuid())
+  requestId     String              /// unique request ID injected by middleware
+  path          String              /// API path called
+  method        String              /// HTTP method
+  middlewareTs   DateTime            /// timestamp when middleware intercepted
+  handlerTs     DateTime            /// timestamp when API handler processed
+  dbWriteTs     DateTime?           /// timestamp when DB write completed (null if read-only)
+  dbReadMs      Int?                /// DB read latency in ms
+  statusCode    Int                 /// HTTP response status
+  clientIp      String?             /// client IP captured by middleware
+  userAgent     String?             /// browser user-agent from middleware
+  layerTrace    String              /// JSON: which layers were touched
+  createdAt     DateTime @default(now())
+}
+
+/// Stores system component health snapshots written by the API and read back for verification
+model ComponentHealth {
+  id          String   @id @default(cuid())
+  component   String               /// e.g. "database", "middleware", "api", "browser"
+  status      String               /// "healthy" | "degraded" | "down"
+  latencyMs   Int                  /// response time in ms
+  details     String               /// JSON with extra info
+  checkedAt   DateTime @default(now())
 }
