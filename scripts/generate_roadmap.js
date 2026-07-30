@@ -1,397 +1,389 @@
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  Header, Footer, PageNumber, AlignmentType, HeadingLevel,
-  WidthType, BorderStyle, ShadingType, SectionType, PageBreak,
-  TableOfContents, NumberFormat } = require('docx');
 const fs = require('fs');
+const { Document, Packer, Paragraph, TextRun, Header, Footer, Table, TableRow, TableCell,
+  AlignmentType, HeadingLevel, PageNumber, WidthType, BorderStyle, ShadingType,
+  SectionType, TableLayoutType, TableOfContents, PageBreak } = require('docx');
 
-// ── Palette: Cool Dawn Mist ──
+// ─── DM-1 Deep Cyan Palette (Tech/AI) ───
 const P = {
-  bg: '101820', primary: '101820', body: '182030',
-  secondary: '506070', accent: '4C6EF5', surface: 'F5F7FA',
-  titleColor: 'FFFFFF', subtitleColor: 'B0B8C8', metaColor: '8899AA', footerColor: '808080'
+  bg: '162235', titleColor: 'FFFFFF', subtitleColor: 'B0B8C0', metaColor: '90989F',
+  footerColor: '687078', accent: '37DCF2',
+  table: { headerBg: '1B6B7A', headerText: 'FFFFFF', accentLine: '1B6B7A', innerLine: 'C8DDE2', surface: 'EDF3F5' }
 };
-const c = h => h.replace('#','');
+
+// ─── Border helpers ───
 const NB = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
 const noBorders = { top: NB, bottom: NB, left: NB, right: NB };
 const allNoBorders = { top: NB, bottom: NB, left: NB, right: NB, insideHorizontal: NB, insideVertical: NB };
 
-// ── Helpers ──
-function h1(text) {
-  return new Paragraph({
-    heading: HeadingLevel.HEADING_1,
-    alignment: AlignmentType.CENTER,
-    spacing: { before: 480, after: 200, line: 312 },
-    children: [new TextRun({ text, bold: true, size: 32, color: c(P.primary),
-      font: { ascii: 'Times New Roman', eastAsia: 'SimHei' } })]
-  });
+// ─── Cover helpers ───
+function calcTitleLayout(title, maxWidthTwips, preferredPt = 40, minPt = 24) {
+  const charWidth = (pt) => pt * 20;
+  const charsPerLine = (pt) => Math.floor(maxWidthTwips / charWidth(pt));
+  let titlePt = preferredPt;
+  let lines;
+  while (titlePt >= minPt) {
+    const cpl = charsPerLine(titlePt);
+    if (cpl < 2) { titlePt -= 2; continue; }
+    lines = splitTitleLines(title, cpl);
+    if (lines.length <= 3) break;
+    titlePt -= 2;
+  }
+  if (!lines || lines.length > 3) {
+    const cpl = charsPerLine(minPt);
+    lines = splitTitleLines(title, cpl);
+    titlePt = minPt;
+  }
+  return { titlePt, titleLines: lines };
 }
 
-function h2(text) {
-  return new Paragraph({
-    heading: HeadingLevel.HEADING_2,
-    spacing: { before: 360, after: 160, line: 312 },
-    children: [new TextRun({ text, bold: true, size: 30, color: c(P.primary),
-      font: { ascii: 'Times New Roman', eastAsia: 'SimHei' } })]
-  });
+function splitTitleLines(title, charsPerLine) {
+  if (title.length <= charsPerLine) return [title];
+  const breakAfter = new Set([...' \t', '-', '/', '(', ')', ',', '.', ':', ';']);
+  const lines = [];
+  let remaining = title;
+  while (remaining.length > charsPerLine) {
+    let breakAt = -1;
+    for (let i = charsPerLine; i >= Math.floor(charsPerLine * 0.6); i--) {
+      if (i < remaining.length && breakAfter.has(remaining[i - 1])) { breakAt = i; break; }
+    }
+    if (breakAt === -1) breakAt = charsPerLine;
+    lines.push(remaining.substring(0, breakAt));
+    remaining = remaining.substring(breakAt);
+  }
+  if (remaining.length > 0) lines.push(remaining);
+  return lines;
 }
 
-function h3(text) {
-  return new Paragraph({
-    heading: HeadingLevel.HEADING_3,
-    spacing: { before: 280, after: 120, line: 312 },
-    children: [new TextRun({ text, bold: true, size: 28, color: c(P.primary),
-      font: { ascii: 'Times New Roman', eastAsia: 'SimHei' } })]
-  });
+function calcCoverSpacing(params) {
+  const { titleLineCount = 1, titlePt = 36, hasSubtitle = false, hasEnglishLabel = false,
+    metaLineCount = 0, fixedHeight = 800, pageHeight = 16838, marginTop = 0, marginBottom = 0 } = params;
+  const SAFETY = 1200;
+  const usableHeight = pageHeight - marginTop - marginBottom - SAFETY;
+  const titleHeight = titleLineCount * (titlePt * 23 + 200);
+  const subtitleHeight = hasSubtitle ? (12 * 23 + 600) : 0;
+  const englishLabelHeight = hasEnglishLabel ? (9 * 23 + 600) : 0;
+  const metaHeight = metaLineCount * (10 * 23 + 100);
+  const implicitParaHeight = 3 * 300;
+  const contentHeight = titleHeight + subtitleHeight + englishLabelHeight + metaHeight + fixedHeight + implicitParaHeight;
+  const remainingSpace = usableHeight - contentHeight;
+  const safeRemaining = Math.max(remainingSpace, 400);
+  const FOOTER_MIN = 800;
+  const rawTop = Math.floor(safeRemaining * 0.45);
+  const rawBottom = Math.floor(safeRemaining * 0.45);
+  const bottomSpacing = Math.max(rawBottom, FOOTER_MIN);
+  const topSpacing = Math.max(rawTop - Math.max(0, FOOTER_MIN - rawBottom), 400);
+  return { topSpacing, bottomSpacing };
 }
 
-function body(text) {
-  return new Paragraph({
-    alignment: AlignmentType.JUSTIFIED,
-    spacing: { after: 120, line: 312 },
-    indent: { firstLine: 480 },
-    children: [new TextRun({ text, size: 24, color: c(P.body),
-      font: { ascii: 'Times New Roman', eastAsia: 'SimSun' } })]
+function buildCoverR1(config) {
+  const P = config.palette;
+  const padL = 1200, padR = 800;
+  const availableWidth = 11906 - padL - padR - 300;
+  const { titlePt, titleLines } = calcTitleLayout(config.title, availableWidth, 40, 24);
+  const titleSize = titlePt * 2;
+  const spacing = calcCoverSpacing({
+    titleLineCount: titleLines.length, titlePt,
+    hasSubtitle: !!config.subtitle, hasEnglishLabel: !!config.englishLabel,
+    metaLineCount: (config.metaLines || []).length, fixedHeight: 400, marginTop: 0, marginBottom: 0,
   });
-}
-
-function bodyNoIndent(text) {
-  return new Paragraph({
-    alignment: AlignmentType.JUSTIFIED,
-    spacing: { after: 120, line: 312 },
-    children: [new TextRun({ text, size: 24, color: c(P.body),
-      font: { ascii: 'Times New Roman', eastAsia: 'SimSun' } })]
-  });
-}
-
-function bullet(text) {
-  return new Paragraph({
-    alignment: AlignmentType.LEFT,
-    spacing: { after: 80, line: 312 },
-    indent: { left: 480, hanging: 240 },
-    children: [
-      new TextRun({ text: '\u2022  ', size: 24, color: c(P.accent),
-        font: { ascii: 'Times New Roman' } }),
-      new TextRun({ text, size: 24, color: c(P.body),
-        font: { ascii: 'Times New Roman', eastAsia: 'SimSun' } })
-    ]
-  });
-}
-
-function makeRow(cells, isHeader = false) {
-  return new TableRow({
-    tableHeader: isHeader,
-    cantSplit: true,
-    children: cells.map(text => new TableCell({
-      width: { size: Math.floor(100 / cells.length), type: WidthType.PERCENTAGE },
-      shading: isHeader
-        ? { type: ShadingType.CLEAR, fill: c(P.accent) }
-        : { type: ShadingType.CLEAR, fill: 'FFFFFF' },
-      borders: {
-        top: { style: BorderStyle.SINGLE, size: 1, color: isHeader ? c(P.accent) : 'D0D5DD' },
-        bottom: { style: BorderStyle.SINGLE, size: 1, color: isHeader ? c(P.accent) : 'D0D5DD' },
-        left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE }
-      },
-      margins: { top: 60, bottom: 60, left: 120, right: 120 },
-      children: [new Paragraph({
-        children: [new TextRun({ text, bold: isHeader, size: 21,
-          color: isHeader ? 'FFFFFF' : c(P.body),
-          font: { ascii: 'Times New Roman' } })]
-      })]
-    }))
-  });
-}
-
-function makeTable(headers, rows) {
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [makeRow(headers, true), ...rows.map(r => makeRow(r))]
-  });
-}
-
-// ── Cover (R1 Pure Paragraph Left, Dark Navy) ──
-function buildCover() {
+  const accentLeft = { style: BorderStyle.SINGLE, size: 8, color: P.accent, space: 12 };
   const children = [];
-  const padL = 1200;
-  const accentLeft = { style: BorderStyle.SINGLE, size: 8, color: c(P.accent), space: 12 };
-
-  // Vertical spacing
-  children.push(new Paragraph({ spacing: { before: 4800 } }));
-
-  // Accent label
-  children.push(new Paragraph({
-    indent: { left: padL },
-    spacing: { after: 500 },
-    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: c(P.accent), space: 8 } },
-    children: [new TextRun({ text: 'S T R A T E G I C   R O A D M A P', size: 18, color: c(P.accent),
-      font: { ascii: 'Times New Roman' }, characterSpacing: 40 })]
-  }));
-
-  // Title
-  children.push(new Paragraph({
-    indent: { left: padL },
-    spacing: { after: 200, line: 920, lineRule: 'atLeast' },
-    children: [new TextRun({ text: 'Strategic Evolution Roadmap', size: 72, bold: true,
-      color: P.titleColor, font: { ascii: 'Times New Roman' } })]
-  }));
-
-  // Subtitle
-  children.push(new Paragraph({
-    indent: { left: padL },
-    spacing: { after: 800 },
-    children: [new TextRun({ text: 'Maritime Global Compliance Swarm  v2.0 \u2192 v5.0', size: 24,
-      color: P.subtitleColor, font: { ascii: 'Times New Roman' } })]
-  }));
-
-  // Meta lines
-  const metaLines = [
-    'Autonomous Regulatory Compliance Agent Swarm',
-    'Global Maritime Freight Operations',
-    'July 2026'
-  ];
-  for (const line of metaLines) {
+  children.push(new Paragraph({ spacing: { before: spacing.topSpacing } }));
+  if (config.englishLabel) {
     children.push(new Paragraph({
-      indent: { left: padL + 200 },
-      spacing: { after: 80 },
-      border: { left: accentLeft },
-      children: [new TextRun({ text: line, size: 24, color: P.metaColor,
-        font: { ascii: 'Times New Roman' } })]
+      indent: { left: padL, right: padR }, spacing: { after: 500 },
+      border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: P.accent, space: 8 } },
+      children: [new TextRun({ text: config.englishLabel.split('').join('  '),
+        size: 18, color: P.accent, font: { ascii: 'Calibri' }, characterSpacing: 40 })],
     }));
   }
-
-  // Bottom line
-  children.push(new Paragraph({ spacing: { before: 3000 } }));
+  for (let i = 0; i < titleLines.length; i++) {
+    children.push(new Paragraph({
+      indent: { left: padL },
+      spacing: { after: i < titleLines.length - 1 ? 100 : 300, line: Math.ceil(titlePt * 23), lineRule: 'atLeast' },
+      children: [new TextRun({ text: titleLines[i], size: titleSize, bold: true,
+        color: P.titleColor, font: { ascii: 'Arial' } })],
+    }));
+  }
+  if (config.subtitle) {
+    children.push(new Paragraph({
+      indent: { left: padL }, spacing: { after: 800 },
+      children: [new TextRun({ text: config.subtitle, size: 24, color: P.subtitleColor,
+        font: { ascii: 'Arial' } })],
+    }));
+  }
+  for (const line of (config.metaLines || [])) {
+    children.push(new Paragraph({
+      indent: { left: padL + 200 }, spacing: { after: 80 },
+      border: { left: accentLeft },
+      children: [new TextRun({ text: line, size: 24, color: P.metaColor, font: { ascii: 'Arial' } })],
+    }));
+  }
+  children.push(new Paragraph({ spacing: { before: spacing.bottomSpacing } }));
   children.push(new Paragraph({
-    indent: { left: padL },
-    border: { top: { style: BorderStyle.SINGLE, size: 2, color: c(P.accent), space: 8 } },
-    children: [new TextRun({ text: 'Maritime Global Compliance Swarm  |  Confidential', size: 16,
-      color: P.footerColor, font: { ascii: 'Times New Roman' } })]
+    indent: { left: padL, right: padR },
+    border: { top: { style: BorderStyle.SINGLE, size: 2, color: P.accent, space: 8 } },
+    spacing: { before: 200 },
+    children: [
+      new TextRun({ text: config.footerLeft || '', size: 16, color: P.footerColor, font: { ascii: 'Arial' } }),
+      new TextRun({ text: '                                                    ' }),
+      new TextRun({ text: config.footerRight || '', size: 16, color: P.footerColor, font: { ascii: 'Arial' } }),
+    ],
   }));
-
   return [new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    layout: { type: 'FIXED' },
+    width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED,
     borders: allNoBorders,
-    rows: [new TableRow({
-      height: { value: 16838, rule: 'exact' },
-      children: [new TableCell({
-        shading: { type: ShadingType.CLEAR, fill: P.bg },
-        borders: noBorders,
-        children
-      })]
-    })]
+    rows: [new TableRow({ height: { value: 16838, rule: 'exact' }, children: [new TableCell({
+      shading: { type: ShadingType.CLEAR, fill: P.bg }, borders: noBorders, children,
+    })] })],
   })];
 }
 
-// ── Body Content ──
+// ─── Body helpers ───
+function h1(text) {
+  return new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 200 },
+    children: [new TextRun({ text, bold: true, font: { ascii: 'Times New Roman' }, size: 32, color: '162235' })] });
+}
+function h2(text) {
+  return new Paragraph({ heading: HeadingLevel.HEADING_2, spacing: { before: 300, after: 160 },
+    children: [new TextRun({ text, bold: true, font: { ascii: 'Times New Roman' }, size: 28, color: '1B6B7A' })] });
+}
+function h3(text) {
+  return new Paragraph({ heading: HeadingLevel.HEADING_3, spacing: { before: 240, after: 120 },
+    children: [new TextRun({ text, bold: true, font: { ascii: 'Times New Roman' }, size: 26, color: '162235' })] });
+}
+function body(text) {
+  return new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: { line: 312, after: 120 },
+    children: [new TextRun({ text, size: 24, color: '000000', font: { ascii: 'Times New Roman' } })] });
+}
+function bodyBold(text) {
+  return new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: { line: 312, after: 120 },
+    children: [new TextRun({ text, size: 24, color: '000000', font: { ascii: 'Times New Roman' }, bold: true })] });
+}
+function bullet(text) {
+  return new Paragraph({ alignment: AlignmentType.LEFT, spacing: { line: 312, after: 60 },
+    indent: { left: 600, hanging: 300 },
+    children: [new TextRun({ text: '\u2022  ' + text, size: 24, color: '000000', font: { ascii: 'Times New Roman' } })] });
+}
+
+function makeHeaderRow(cells) {
+  return new TableRow({ tableHeader: true, cantSplit: true, children: cells.map(t => new TableCell({
+    shading: { type: ShadingType.CLEAR, fill: P.table.headerBg },
+    children: [new Paragraph({ children: [new TextRun({ text: t, bold: true, size: 21, color: P.table.headerText, font: { ascii: 'Times New Roman' } })] })],
+    borders: { top: NB, bottom: { style: BorderStyle.SINGLE, size: 2, color: P.table.headerBg }, left: NB, right: NB },
+    margins: { top: 60, bottom: 60, left: 120, right: 120 },
+  })) });
+}
+function makeDataRow(cells, idx) {
+  return new TableRow({ cantSplit: true, children: cells.map(t => new TableCell({
+    shading: idx % 2 === 0 ? { type: ShadingType.CLEAR, fill: P.table.surface } : undefined,
+    children: [new Paragraph({ children: [new TextRun({ text: t, size: 21, color: '000000', font: { ascii: 'Times New Roman' } })] })],
+    borders: { top: NB, bottom: { style: BorderStyle.SINGLE, size: 1, color: P.table.innerLine }, left: NB, right: NB },
+    margins: { top: 60, bottom: 60, left: 120, right: 120 },
+  })) });
+}
+function makeTable(headers, rows) {
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED,
+    borders: { top: { style: BorderStyle.SINGLE, size: 2, color: P.table.accentLine },
+      bottom: { style: BorderStyle.SINGLE, size: 2, color: P.table.accentLine },
+      left: NB, right: NB, insideVertical: NB },
+    rows: [makeHeaderRow(headers), ...rows.map((r, i) => makeDataRow(r, i))],
+  });
+}
+
+// ─── Document Content ───
+const coverConfig = {
+  title: 'Maritime Global Compliance Swarm: Strategic Roadmap 2025-2035',
+  englishLabel: 'AUTONOMOUS REGULATORY COMPLIANCE AGENT SWARM',
+  subtitle: 'Three-Tier Strategic Analysis and Decade Evolution Plan',
+  metaLines: ['Version 3.0  |  Event-Driven Architecture  |  10-State Finding Lifecycle',
+    'Polyglot Microservices  |  Composite Risk Scoring  |  Knowledge Graph'],
+  footerLeft: 'Maritime Compliance Intelligence',
+  footerRight: 'July 2026',
+  palette: P,
+};
+
 const bodyContent = [
-  // ── 3. Executive Summary ──
-  h1('3. Executive Summary'),
-  body('This roadmap presents a structured, three-tier evolution strategy for the Maritime Global Compliance Swarm, charting a course from the current reactive compliance automation platform (v2.0) to a predictive, knowledge-driven regulatory intelligence system (v5.0). The strategy is grounded in the existing architecture, specifically the event-driven backbone, the 10-state finding lifecycle state machine, and the polyglot microservice boundary between the Python FastAPI gateway and the Go MTTR tracker service. Each tier compounds upon the investments of the prior tier, ensuring that architectural decisions made today create optionality rather than technical debt.'),
-  body('Tier 1 delivers immediate, high-return improvements that integrate directly with the current event bus and state machine. Composite risk scoring introduces multi-dimensional weighted heuristics to replace static severity labels, while the compliance knowledge graph transforms flat finding records into a queryable relational network. Parallel state tracks extend the finding lifecycle to accommodate real-world compliance workflows involving legal review, evidence collection, and regulatory notification. These three initiatives require no new infrastructure and maintain full backward compatibility with the existing 45 REST routes and 7 reaction rules.'),
-  body('Tier 2 establishes the structural foundation required for long-term platform resilience. Event sourcing with CQRS converts the existing EventLog and FindingTransition tables into an immutable audit trail with separate read and write models, mirroring patterns proven in financial trading platforms. A composable middleware pipeline replaces the current sequential reaction evaluation with a testable, independently deployable chain of enrichment, deduplication, and routing concerns. An integrated observability stack provides the operational visibility essential for managing a polyglot system across multiple services.'),
-  body('Tier 3 pursues transformative capabilities that position the platform at the frontier of maritime compliance technology. Satellite and AIS data integration enables real-time vessel tracking correlation with compliance events, predictive compliance intelligence applies machine learning to historical data for proactive risk identification, and digital twin compliance simulation creates a virtual environment for what-if analysis of regulatory changes and operational scenarios.'),
+  // ─── EXECUTIVE SUMMARY ───
+  h1('Executive Summary'),
+  body('The Maritime Global Compliance Swarm represents a paradigm shift in how global maritime freight operators manage regulatory compliance across multiple jurisdictions. This strategic roadmap synthesises a three-tier analysis of the current system architecture, market positioning, and technology evolution trajectory to chart a definitive course from the present v3.0 implementation through to a mature, AI-native compliance platform by 2035.'),
+  body('The swarm currently automates GDPR, CCPA, LGPD, PDPA, and PIPA compliance through five integrated agents: a PII Anonymiser with HMAC-SHA256 tokenisation and ML-based NER detection, an EDI SQL Auditor with eleven parametric queries across five compliance domains, a Remediation Route Generator with decision-matrix-driven policy creation, a Finding State Machine governing ten lifecycle states with twenty validated transitions, and a Golang-based MTTR Telemetry Tracker providing real-time performance metrics. These agents communicate through an event-driven architecture powered by a database-backed event bus with seven autonomous reaction rules.'),
+  body('The three-tier analysis reveals that the maritime compliance technology landscape is undergoing a fundamental transformation driven by satellite AIS densification, blockchain-based electronic Bills of Lading, EU ETS carbon reporting mandates, and the emergence of Arctic shipping corridors. Each of these forces creates new data repositories, new compliance obligations, and new risk vectors that the swarm must evolve to address. This roadmap identifies six strategic evolution horizons, each building upon the previous, to transform the current agent swarm into an autonomous, self-learning compliance intelligence platform.'),
 
-  // ── 4. Current Architecture Assessment ──
-  h1('4. Current Architecture Assessment'),
-  body('The Maritime Global Compliance Swarm operates through four core autonomous agents coordinated by an event-driven architecture. The PII Anonymiser scans EDI payloads for personally identifiable information using a hybrid detection engine combining regex pattern matching with spaCy NER fallback for free-text fields. The EDI Auditor validates message structures, mandatory field presence, and code-list compliance against jurisdiction-specific regulatory profiles. The Remediation Generator produces corrective policy recommendations and EDI update scripts tailored to each finding type and affected partner. The MTTR Tracker, implemented in Go for throughput-sensitive telemetry ingestion, maintains buffered write pipelines with background flushing to record resolution times across finding categories.'),
-  body('The 10-state finding lifecycle state machine is the architectural backbone. States span the full compliance arc from DETECTED through TRIAGED, ASSIGNED, IN_REMEDIATION, AWAITING_VERIFICATION, VERIFIED, and CLOSED, with ESCALATED, RISK_ACCEPTED, and FALSE_POSITIVE as terminal or exception paths. Twenty validated transitions connect these states, enforced by guard conditions that prevent invalid state changes. Seven trigger types initiate transitions, and timeout SLA rules enable automatic escalation when resolution windows are breached. The FindingTransition table records every state change with timestamps, actor identities, and contextual payloads, providing the audit trail that maritime regulators require.'),
-  body('The FastAPI gateway exposes 45 REST routes covering finding management, agent orchestration, MTTR reporting, and system health. An in-process event bus bridges the state machine to the reaction engine, which evaluates seven autonomous reaction rules on each state transition. The Go MTTR tracker receives events via a lightweight HTTP bridge, demonstrating a viable polyglot service boundary. The interactive HTML dashboard consumes aggregated data from both services.'),
-  body('Despite these strengths, the architecture exhibits three structural limitations that constrain its evolution. First, findings carry a static severity classification (critical, high, medium, low, info) that does not account for risk velocity, recurrence probability, jurisdictional exposure, or data sensitivity gradients. Two findings labelled "high" may represent vastly different actual risk profiles yet are treated identically by the state machine. Second, findings exist as isolated records without relational context; recurring patterns across partners, routes, data domains, and regulatory frameworks cannot be expressed or queried efficiently. Third, the operational database serves both write and read workloads, a coupling that will degrade performance as event volume and query complexity grow.'),
+  // ─── TIER 1: CURRENT STATE ASSESSMENT ───
+  h1('Tier 1: Current State Assessment'),
 
-  // ── 5. Tier 1 ──
-  h1('5. Tier 1: Immediate High-Value Iterations'),
-  h2('5.1 Composite Risk Scoring'),
-  body('The most impactful near-term enhancement is the introduction of a composite risk score that replaces the static severity label as the primary triage signal. This score combines five weighted dimensions into a single numeric value, computed as each finding enters the TRIAGED state and updated dynamically as new evidence accumulates. The five dimensions are: severity (the original classifier output, weighted at approximately 25%), jurisdictional exposure (penalty severity weighted by regulatory regime, approximately 20%), data sensitivity gradient (financial identifiers and government-issued documents carrying higher re-identification risk than contact information, approximately 20%), exposure breadth (number of partners, routes, and data domains affected by the same underlying issue, approximately 20%), and temporal urgency (proximity to regulatory filing deadlines and SLA windows, approximately 15%).'),
-  body('Integration with the existing 10-state FSM is straightforward. The composite score is computed by a dedicated scoring service that subscribes to the event bus and attaches its output to the finding record before the TRIAGED-to-ASSIGNED transition is evaluated. Guard conditions are then extended to reference the composite score: a finding with a score exceeding a configurable threshold can be automatically escalated to ESCALATED without waiting for the timeout SLA to expire. This enables risk-proportional response times where genuinely critical findings receive immediate attention while lower-risk findings follow the standard workflow. Crucially, each factor contribution remains individually queryable, ensuring that the scoring logic remains explainable to regulators and compliance officers.'),
-  body('The implementation requires no new infrastructure. The scoring service is a Python module that reads from the existing event bus and writes to the finding record. Historical finding data can be backfilled to establish baseline score distributions and calibrate weight thresholds. The initial weights are heuristically derived from regulatory penalty structures and can be refined empirically as the system accumulates resolved finding outcomes.'),
+  h2('1.1 Architecture Maturity Analysis'),
+  body('The current v3.0 architecture operates as a polyglot microservices system with a Python FastAPI gateway on port 8000 and a Golang MTTR tracking service on port 8080, connected through a shared SQLite database in development mode with PostgreSQL and PostGIS targeted for production deployment. The system implements forty-five REST API routes, a ten-tab interactive HTML dashboard, and a Python client SDK with typed Pydantic models for programmatic integration.'),
+  body('The event-driven architecture represents the most significant recent advancement. The Finding State Machine, with its ten states and twenty transitions, enforces guard conditions such as CRITICAL findings requiring sign-off before RISK_ACCEPTED transitions, and implements per-severity SLA timeouts that auto-escalate findings from CRITICAL at one hour through INFO at one hundred and sixty-eight hours. Every successful transition triggers two downstream effects: a FINDING_STATE_CHANGED event published to the event bus, and an async HTTP POST to the Golang MTTR tracker, creating a complete dual-write audit trail.'),
+  body('The seven reaction rules form the autonomous decision-making layer of the swarm. These rules enable the system to respond to events without human intervention, from triggering EDI partner notifications for CRITICAL findings through initiating automatic anonymisation scans for PII exposure events, to re-running compliance audits when certificate expiry findings are detected. Each rule evaluates event type, severity, risk category, and payload fields before firing, ensuring that reactions are contextually appropriate.'),
 
-  h2('5.2 Compliance Knowledge Graph'),
-  body('A compliance knowledge graph transforms the system from a record-keeping tool into an analytical platform capable of reasoning about cross-jurisdictional regulatory relationships. The graph structure connects five core entity types: regulations (GDPR articles, LGPD requirements, CBP mandates, SOLAS provisions), jurisdictions (EU, Brazil, US, Singapore, with their specific enforcement patterns), data categories (PII types from the anonymiser taxonomy, EDI field classifications), compliance obligations (data retention limits, encryption standards, consent requirements, notification duties), and findings (linked to all preceding entities through their evidence payloads).'),
-  body('Key query patterns that this graph enables include cross-jurisdictional conflict detection (identifying where obligations from different regulatory regimes impose contradictory requirements on the same data element), recurrence analysis (tracing repeated findings across partners, routes, and jurisdictions to identify systemic compliance gaps), remediation effectiveness measurement (correlating remediation policies with downstream finding recurrence rates), and regulatory impact assessment (evaluating how a proposed regulation change would propagate through the existing finding and obligation network). These queries are either impossible or prohibitively expensive with the current flat relational schema.'),
-  body('The initial implementation can use SQLite-backed adjacency tables without requiring a dedicated graph database. Three edge types provide immediate value: Finding-to-Partner (via EDI connection profiles), Finding-to-DataField (via evidence payloads), and Remediation-to-Finding (via policy identifiers stored on findings). Additional edge types for route correlation, jurisdiction mapping, and temporal patterns are added incrementally as analytical needs evolve. The graph data is maintained by lightweight event bus subscribers that update adjacency tables in response to state transitions and new finding creation, ensuring consistency with the primary data store.'),
+  h2('1.2 Composite Risk Scoring Capabilities'),
+  body('The recently introduced composite risk scoring engine implements a five-dimensional weighted model that combines severity, jurisdiction, data sensitivity, exposure breadth, and temporal urgency into a single Composite Risk Score normalised to the zero-to-one range. The weighting configuration, with severity at thirty percent, jurisdiction and data sensitivity at twenty percent each, and exposure breadth and temporal urgency at fifteen percent each, reflects the maritime industry\'s regulatory priorities where the nature of the violation and the governing jurisdiction carry the greatest risk weight.'),
+  body('The jurisdiction risk scoring differentiates between the five supported regulatory frameworks based on enforcement rigour and penalty severity, with GDPR scoring the maximum one-point-zero due to its four percent global turnover fine capability and strict Data Protection Authority requirements, while PDPA scores zero-point-five reflecting Singapore\'s more moderate but proactive enforcement posture. The data sensitivity dimension maps seven classification levels from special category data at one-point-zero through operational data at zero-point-two-five, enabling proportionate risk assessment that avoids both under-reaction and costly over-compliance.'),
 
-  h2('5.3 Parallel State Tracks'),
-  body('Real compliance workflows frequently require concurrent processing tracks that the current single-state model cannot represent. A finding in IN_REMEDIATION may simultaneously require legal review approval, regulatory agency notification, stakeholder communication, and documentary evidence collection. The current architecture forces these parallel processes into sequential dependencies, introducing artificial delays and creating incomplete audit trails for activities that occur alongside but independently of the main finding lifecycle.'),
-  body('The recommended approach introduces parallel state machines that run alongside the primary 10-state lifecycle. Three secondary tracks address the most common workflow requirements: an approval workflow (DRAFT, UNDER_REVIEW, APPROVED, REJECTED), an evidence collection workflow (COLLECTING, SUBMITTED, ACCEPTED, INSUFFICIENT), and a regulatory notification workflow (NOTIFICATION_DUE, SENT, ACKNOWLEDGED, DISPUTE_OPEN). Each track is stored in a dedicated junction table linked to the parent finding, preserving complete backward compatibility with the existing state machine implementation.'),
-  body('The parallel tracks subscribe to the same event bus and transition based on events from the primary state machine or from external triggers (legal review completion, evidence submission, regulatory acknowledgement). Guard conditions can reference parallel track states: for example, the IN_REMEDIATION to VERIFIED transition might require both the evidence track to be in ACCEPTED and the approval track to be in APPROVED. This compositional approach allows workflow complexity to grow without modifying the core state machine, maintaining the architectural invariant that the 10-state model remains the single source of truth for finding status.'),
+  h2('1.3 Middleware and Observability Infrastructure'),
+  body('The middleware pipeline implements a chain-of-responsibility pattern with four composable components: authentication middleware supporting both API key and JWT validation, token-bucket rate limiting with per-IP tracking, request validation enforcing payload size limits, and structured audit logging producing JSON-formatted entries suitable for ELK, Loki, or CloudWatch ingestion. The pipeline executes in priority order, with each middleware able to short-circuit the request chain by returning a response directly.'),
+  body('The observability module provides three core capabilities: a structured JSON log formatter with correlation ID propagation across the entire request lifecycle, a health aggregator that registers and executes health check functions for all system components to compute an overall system health status, and a metrics collector supporting counters, gauges, and histograms with thread-safe operations. These foundations enable the swarm to meet the operational visibility requirements of enterprise maritime operators managing compliance across global trade lanes.'),
 
-  // ── 6. Tier 2 ──
-  h1('6. Tier 2: Structural Foundation Upgrades'),
-  h2('6.1 Event Sourcing and CQRS'),
-  body('The project already maintains an EventLog table and a FindingTransition table that collectively record the full history of state changes. Event sourcing elevates this existing pattern into an architectural invariant: the event log becomes the single authoritative source of truth, and all other data representations are derived materialised projections. Under this model, the current state of any finding is computed by replaying its event history rather than stored as a mutable field. This is the pattern used by financial trading platforms such as LMAX Disruptor and incident management systems such as PagerDuty, where complete auditability and temporal queryability are non-negotiable requirements.'),
-  body('The benefits for a compliance platform are substantial. Every state change exists as an immutable event with a timestamp, actor, context payload, and sequence number, providing complete auditability by construction rather than by convention. Time-travel queries become possible: the system can answer "what was the state of all EU-route findings on June 1st?" by replaying events up to that point. Debugging is simplified because the full causal chain of any finding state is a single ordered event stream. Data corruption resilience is inherent because any projection can be discarded and rebuilt from the event log.'),
-  body('The CQRS (Command Query Responsibility Segregation) complement separates write and read models. The event store accepts all writes (state transitions, new findings, reaction executions), while denormalised read projections serve queries independently. The Go MTTR tracker already demonstrates this pattern: it receives events via HTTP and maintains its own read model. This separation is extended to dashboard statistics, compliance summaries, and partner-level analytics. Write performance is never degraded by complex read queries, and read models can be independently optimised for their specific access patterns. The migration path is incremental: a state_version field tracks the last applied event, new writes go through the event store first, and existing data is backfilled by replaying historical transitions.'),
+  // ─── TIER 2: COMPETITIVE AND MARKET POSITIONING ───
+  h1('Tier 2: Competitive and Market Positioning'),
 
-  h2('6.2 Middleware Pipeline Architecture'),
-  body('The current seven reaction rules are loaded at startup and evaluated sequentially in response to each event. A middleware pipeline architecture replaces this monolithic evaluation with a composable chain of independently testable processing stages. Each middleware in the chain receives an event, performs a specific cross-cutting concern, and passes a (potentially modified) event to the next stage. The pipeline operates between event publication and reaction execution, providing a clean separation of concerns.'),
-  body('Five initial middleware stages address the most pressing cross-cutting needs. An authentication and authorisation middleware validates the event source and verifies that the originating agent has permission to trigger the requested transition. A rate-limiting middleware caps escalation frequency per partner to prevent notification fatigue and operational overload. An enrichment middleware augments events with partner context, jurisdiction weights, historical finding counts, and composite risk scores before reactions evaluate them. A deduplication middleware suppresses duplicate alerts within a configurable time window, collapsing repeated similar findings into a single escalated notification. A routing middleware dispatches enriched events to the correct reaction handler based on the augmented data, replacing the current linear evaluation with targeted dispatch.'),
-  body('Each middleware is independently testable with mock events, independently deployable without modifying the reaction rules, and reorderable without code changes through configuration. This is the pattern used by production event processing systems including Kafka Streams processors and AWS EventBridge Pipes. The interface contract is simple: each middleware receives an event context and returns either a modified event (enrichment), a suppressed event (deduplication), or a passthrough event (no-op), along with a status indicator that determines whether downstream processing continues.'),
+  h2('2.1 Regulatory Landscape Evolution'),
+  body('The global maritime regulatory environment is accelerating in both breadth and depth. The EU Emissions Trading System maritime extension, effective from 2024, introduces a sixth compliance domain for carbon reporting that requires MRV data integration, emissions registry connectivity, and carbon credit tracking. This mandate affects every vessel calling at EU ports, creating an entirely new category of compliance findings that the current five-domain auditor cannot detect.'),
+  body('Simultaneously, the International Maritime Organization\'s 2023 Strategy on Reduction of GHG Emissions from Ships targets net-zero by approximately 2050, with interim checkpoints at 2030 and 2040. This creates a decadal compliance trajectory where carbon reporting requirements will progressively tighten, requiring the swarm\'s audit query registry to evolve from static SQL queries to dynamic, regulation-version-aware compliance checks that can adapt as new IMO guidelines are adopted.'),
+  body('The Arctic shipping corridor, increasingly viable due to sea ice retreat, introduces jurisdictional complexity as vessels transit between UNCLOS provisions, Arctic Council guidelines, and the national regulations of Russia, Canada, Denmark, Norway, and the United States. Each Arctic coastal state maintains distinct data reporting requirements, environmental protection mandates, and navigation safety obligations that create overlapping and sometimes conflicting compliance obligations for operators.'),
 
-  h2('6.3 Observability Stack'),
-  body('The polyglot architecture spanning Python and Go services demands a unified observability layer that transcends language-specific logging. The recommended stack comprises four pillars: structured logging using JSON-formatted output with correlation IDs that trace a single finding across both services, distributed tracing using OpenTelemetry instrumentation that follows requests from the FastAPI gateway through the event bus to the Go MTTR tracker, metrics collection exposing Prometheus-format counters and histograms for finding throughput, transition latency, reaction execution time, and composite risk score distributions, and health dashboards consolidating service status, SLA compliance rates, and alerting thresholds into a single operational view.'),
-  body('Structured logging is the highest-priority pillar because it provides immediate debugging value with minimal implementation effort. Each log entry includes the finding ID, transition type, actor, timestamp, and service identity, enabling cross-service correlation through simple log aggregation. Distributed tracing is added incrementally by instrumenting the HTTP bridge between Python and Go services, providing end-to-end request latency visibility. Metrics collection extends the existing MTTR telemetry with system-level operational metrics, enabling proactive capacity planning and performance anomaly detection before they impact compliance SLAs.'),
+  h2('2.2 Data Repository Proliferation'),
+  body('The maritime data ecosystem is undergoing exponential growth in both volume and variety. Automatic Identification System data, transmitted at rates exceeding twenty million messages per day globally, provides vessel positional intelligence that carries compliance implications for route deviation detection, sanctions screening, and port state control preparation. The swarm\'s current architecture does not yet ingest or process AIS data, representing a significant capability gap.'),
+  body('Blockchain-based electronic Bills of Lading, pioneered by platforms such as TradeLens and CargoX, introduce immutable, distributed ledger records that fundamentally change the compliance audit paradigm. Traditional EDI compliance auditing assumes centralised, queryable databases, but blockchain eBL requires a shift towards smart contract event monitoring, hash-based integrity verification, and multi-party consent tracking for data access and modification operations.'),
+  body('IoT container sensor networks, transmitting temperature, humidity, shock, and location data via MQTT brokers, create continuous compliance data streams for cold-chain pharmaceutical shipments, perishable food logistics, and dangerous goods monitoring. The swarm\'s current batch-oriented audit model must evolve to support streaming data compliance, where violations are detected and responded to in near-real-time as sensor data deviates from acceptable thresholds.'),
 
-  // ── 7. Tier 3 ──
-  h1('7. Tier 3: Transformative Vision'),
-  h2('7.1 Satellite and AIS Data Integration'),
-  body('Maritime compliance does not exist in a purely digital context. Vessel movements, port calls, transshipment operations, and environmental conditions create a rich operational data layer that directly correlates with compliance events. Integrating real-time Automatic Identification System (AIS) vessel tracking data with the compliance swarm enables spatiotemporal correlation between physical operations and regulatory findings. A finding flagged during vessel transit through EU territorial waters carries different urgency and jurisdictional implications than one generated while the vessel is in international waters.'),
-  body('The integration architecture extends the event bus with external data source adapters. An AIS feed processor ingests vessel position reports, port arrival and departure events, and route deviation alerts. A weather data adapter provides environmental context that affects certain compliance categories, such as temperature-sensitive cargo documentation and emissions reporting. An environmental monitoring adapter captures real-time data on emission zones, ballast water exchange requirements, and protected marine area proximity. Each adapter publishes events to the existing event bus, making external data available to the reaction engine, composite risk scorer, and knowledge graph without modifying their internal logic.'),
-  body('Practical applications include jurisdiction-aware finding routing (automatically assigning findings based on the vessel current or recent port calls), voyage-contextual risk scoring (adjusting composite scores based on route complexity and environmental conditions), and regulatory deadline tracking (correlating filing deadlines with estimated port arrival times to trigger proactive compliance actions). The existing 45 REST routes are extended with vessel-centric query endpoints, while the dashboard gains a map layer showing real-time compliance status alongside vessel positions.'),
-
-  h2('7.2 Predictive Compliance Intelligence'),
-  body('Predictive compliance intelligence applies machine learning models to historical compliance data to identify risks before they manifest as findings. The foundation is a labelled dataset of resolved findings with known outcomes (resolved without recurrence, recurred within 90 days, escalated to regulatory body, resolved as false positive). The Tier 1 knowledge graph and Tier 2 event store provide the structured training data required for meaningful model development, which is why this capability is positioned in Tier 3 rather than earlier.'),
-  body('Three model categories address distinct prediction targets. A recurrence prediction model estimates the probability that a remediated finding will reappear within a given time window, enabling compliance teams to prioritise partners and data domains with the highest recurrence risk. An anomaly detection model identifies unusual patterns in EDI message flows, partner behaviour, and finding distributions that may indicate emerging compliance risks before they trigger formal findings. A risk trajectory model projects the composite risk score evolution for active findings based on historical resolution patterns, enabling proactive resource allocation to findings likely to escalate.'),
-  body('Model outputs are integrated into the existing workflow as advisory signals rather than autonomous actions. A predicted recurrence probability above a configurable threshold triggers a notification to the compliance team alongside the finding, providing human decision-makers with additional context without removing their authority. Model predictions are logged alongside the events that informed them, maintaining the audit trail and explainability requirements that maritime regulators demand. The models are retrained on a scheduled cadence using the event store as the training data source, ensuring that predictions reflect current operational patterns rather than stale historical baselines.'),
-
-  h2('7.3 Digital Twin Compliance Simulation'),
-  body('A digital twin of the compliance posture creates a virtual replica of the entire regulatory compliance landscape that can be subjected to what-if analysis without affecting the operational system. The twin mirrors the current state of all findings, partner profiles, jurisdiction mappings, and regulatory obligations derived from the event store and knowledge graph. It supports scenario simulation where proposed regulatory changes, partner onboarding events, or operational procedure modifications are applied to the twin and their cascading effects observed across the compliance network.'),
-  body('Regulation impact simulation evaluates how a proposed regulatory change would propagate through the existing finding and obligation graph, identifying affected partners, data categories, and remediation policies before the regulation takes effect. Partner risk simulation models the compliance impact of onboarding a new trading partner by injecting their EDI profile into the twin and observing predicted finding patterns. Operational scenario testing simulates the effect of changes to detection rules, remediation policies, or escalation thresholds on system-wide metrics such as MTTR, false positive rates, and SLA compliance. The twin is rebuilt from the event store on demand, ensuring it reflects the latest operational state while remaining isolated from production traffic.'),
-
-  // ── 8. Implementation Roadmap ──
-  h1('8. Implementation Roadmap'),
-  body('The implementation follows a phased timeline aligned with the three-tier structure, with each phase building on the completed investments of the prior phase. Dependencies between initiatives within each tier are minimised to enable parallel development streams, while dependencies across tiers are explicit and gate subsequent work.'),
-  bodyNoIndent('Tier 1 (Months 1 to 3) delivers the three immediate initiatives in parallel development streams. Composite risk scoring leads the timeline because it integrates most directly with the existing state machine and provides the foundational scoring signal used by subsequent tiers. The compliance knowledge graph follows in parallel, beginning with the three core edge types and expanding based on early analytical usage patterns. Parallel state tracks begin in month two after the risk scoring integration is stable, allowing the parallel track guard conditions to reference composite scores from the start. Estimated team allocation is two to three engineers. Key milestones include composite risk score production deployment by end of month one, knowledge graph v1 with partner and data field edges by end of month two, and approval and evidence workflow tracks operational by end of month three.'),
-  bodyNoIndent('Tier 2 (Months 4 to 9) addresses the structural foundation. Event sourcing migration begins in month four with the introduction of the event store as the canonical write target, followed by CQRS read projection implementation in months five and six. The middleware pipeline is developed in months five through seven, with each middleware stage introduced incrementally and validated against the existing reaction rule suite. The observability stack is deployed progressively: structured logging in month four, distributed tracing instrumentation in months six and seven, and metrics collection with dashboard integration in months eight and nine. Estimated team allocation expands to three to four engineers. The key milestone is full event sourcing migration completion by end of month six, after which all Tier 3 capabilities can rely on a complete, immutable audit trail as their data foundation.'),
-  bodyNoIndent('Tier 3 (Months 10 to 24) pursues the transformative capabilities. Satellite and AIS data integration begins in month ten with the external adapter framework, followed by vessel tracking feed integration in months eleven and twelve. Predictive compliance intelligence development starts in month thirteen, after the event store and knowledge graph have accumulated sufficient historical data to support meaningful model training. Digital twin simulation is the final capability, developed in months eighteen through twenty-four, because it depends on the full maturity of the knowledge graph, event store, and predictive models. Team allocation at this stage includes two to three engineers plus a data scientist for the ML components.'),
-
-  // ── Roadmap Table ──
   makeTable(
-    ['Tier', 'Initiative', 'Timeline', 'Key Milestone'],
+    ['Data Source', 'Protocol', 'Compliance Value', 'Integration Priority'],
     [
-      ['1', 'Composite Risk Scoring', 'Month 1', 'Score in production, guard conditions active'],
-      ['1', 'Compliance Knowledge Graph', 'Month 2', 'Partner and data field edges operational'],
-      ['1', 'Parallel State Tracks', 'Month 3', 'Approval and evidence workflows live'],
-      ['2', 'Event Sourcing + CQRS', 'Month 4-6', 'Event store as canonical source, read projections active'],
-      ['2', 'Middleware Pipeline', 'Month 5-7', 'Five middleware stages in production'],
-      ['2', 'Observability Stack', 'Month 4-9', 'Structured logging, tracing, metrics, dashboards'],
-      ['3', 'Satellite & AIS Integration', 'Month 10-12', 'Vessel tracking feed correlated with findings'],
-      ['3', 'Predictive Compliance Intelligence', 'Month 13-18', 'Recurrence and anomaly models deployed'],
-      ['3', 'Digital Twin Simulation', 'Month 18-24', 'What-if analysis for regulation impact'],
+      ['AIS Feeds', 'Kafka / UDP', 'Vessel tracking, route deviation, sanctions', 'P0 - Critical'],
+      ['Blockchain eBL', 'Smart contract events', 'Bill of Lading integrity, chain of custody', 'P0 - Critical'],
+      ['IoT Container Sensors', 'MQTT broker', 'Cold-chain, hazmat, shock detection', 'P1 - High'],
+      ['Emissions Monitoring', 'MRV Data API', 'EU ETS, IMO DCS carbon reporting', 'P1 - High'],
+      ['Port Community Systems', 'REST + webhooks', 'Customs pre-clearance, port fees', 'P2 - Medium'],
+      ['Single-Window Customs', 'EDIFACT CUSCAR/CUSRES', 'Real-time filing verification', 'P2 - Medium'],
+      ['Crew Management', 'REST + SSO', 'Crew privacy, MLC 2006', 'P3 - Standard'],
+      ['Terminal OS', 'EDIFACT COPARN/COARRI', 'Container movement, storage deadlines', 'P3 - Standard'],
     ]
   ),
+  new Paragraph({ spacing: { before: 80, after: 200 }, children: [new TextRun({ text: 'Table 1: Maritime Data Repository Integration Priority Matrix', size: 21, color: '506070', font: { ascii: 'Times New Roman' }, italics: true })] }),
 
-  // ── 9. Risk Analysis ──
-  h1('9. Risk Analysis and Mitigation'),
-  body('Four primary risks attend this evolutionary roadmap, each requiring explicit mitigation strategies. Complexity creep is the most insidious risk: each tier adds architectural sophistication, and without disciplined governance the system may become harder to operate than the compliance problems it solves. Mitigation requires that every new component must demonstrably simplify an existing operational pain point, not merely add capability. The middleware pipeline and event sourcing architecture both serve this test because they replace implicit coupling with explicit, testable contracts. Architectural decision records must document the rationale for each addition, and quarterly architecture reviews should evaluate whether any component should be simplified or removed.'),
-  body('Data quality risk affects Tier 1 (risk scoring) and Tier 3 (predictive intelligence) most directly. The composite risk score is only as reliable as the input dimensions, and predictive models trained on noisy or incomplete historical data will produce unreliable projections. Mitigation involves establishing data quality metrics for each scoring dimension, implementing automated data quality checks as part of the Tier 2 observability stack, and designing predictive models with explicit confidence intervals that degrade gracefully when input data quality is below threshold. The event sourcing architecture in Tier 2 provides the data lineage tracking required to diagnose data quality issues at their source.'),
-  body('Regulatory uncertainty is inherent in maritime compliance, where frameworks evolve in response to geopolitical events, environmental concerns, and technological change. The knowledge graph and digital twin capabilities are specifically designed to absorb regulatory change gracefully, but the initial graph schema and twin model must be sufficiently flexible to accommodate regulation types that do not yet exist. Mitigation involves designing the graph with a generic obligation entity type rather than encoding specific regulatory structures, and maintaining a regulatory change monitoring feed that triggers graph updates when new regulations are promulgated.'),
-  body('Team skills gap risk emerges primarily in Tier 2 and Tier 3, where event sourcing, CQRS, distributed tracing, and machine learning require specialised expertise not present in the current team composition. Mitigation involves phased hiring aligned with tier timelines, investment in training programmes during Tier 1 (while the technical complexity is manageable), and strategic use of consultant expertise for the initial event sourcing migration and ML model architecture, transitioning knowledge to the internal team through pair programming and documented decision records.'),
+  // ─── TIER 3: TECHNOLOGY EVOLUTION TRAJECTORY ───
+  h1('Tier 3: Technology Evolution Trajectory'),
 
-  // ── 10. Expected Benefits ──
-  h1('10. Expected Benefits and Success Metrics'),
-  body('The three-tier evolution strategy targets measurable improvements across four compliance performance dimensions. Mean time to remediation (MTTR) is expected to decrease through faster triage (composite risk scoring prioritises genuinely critical findings), reduced false positive overhead (knowledge graph contextualisation prevents unnecessary escalation), and proactive issue identification (predictive intelligence catches emerging risks before they become formal findings). The current MTTR tracked by the Go service establishes the baseline; a reduction of 20 to 40 percent is projected within the first twelve months as Tier 1 and Tier 2 capabilities reach maturity.'),
-  body('False positive rate improvement is driven by the composite risk score and knowledge graph working in tandem. The risk score weights recurrence probability, so first-time minor discrepancies from compliant partners receive lower priority than recurring issues from problematic partners. The knowledge graph enables partner-level and route-level baseline profiling that distinguishes systematic non-compliance from isolated anomalies. A false positive rate reduction of 30 to 50 percent is projected as these systems accumulate historical data and calibrate their scoring weights against actual outcomes.'),
-  body('Cross-jurisdictional compliance coverage expands from the current single-jurisdiction audit model to a unified multi-jurisdictional view. The knowledge graph maps regulatory obligations across jurisdictions and identifies conflicts, enabling the system to flag findings that satisfy one jurisdiction but violate another. Satellite and AIS integration adds operational context that determines which jurisdiction applies based on vessel position and route. The target is coverage of the five primary maritime regulatory regimes (EU GDPR, LGPD, US CBP, Singapore PDPA, and IMO SOLAS) with automated conflict detection between them.'),
-  body('Predictive accuracy is the long-term success metric for Tier 3 capabilities. The recurrence prediction model targets a precision of at least 70 percent (meaning at least 70 percent of predicted recurrences actually recur) with recall above 60 percent (catching at least 60 percent of actual recurrences). These thresholds are calibrated against the baseline recurrence rate in historical data and are designed to provide meaningful decision support without generating excessive false alarms. The digital twin capability is measured by its simulation fidelity: the gap between simulated and actual compliance outcomes for historical scenarios should narrow below 15 percent within six months of deployment.'),
+  h2('3.1 Satellite and Remote Sensing Integration'),
+  body('The convergence of satellite AIS, synthetic aperture radar, and optical Earth observation is creating an unprecedented maritime surveillance capability. Satellite AIS providers such as exactEarth, Spire Global, and ORBCOMM operate constellations capable of detecting AIS transmissions from vessels far beyond the reach of shore-based receivers, with global coverage achieved through Low Earth Orbit constellations. For compliance, this means that vessel positional data is becoming near-ubiquitous, enabling compliance systems to detect route deviations, identify potential sanctions-busting voyages, and verify declared port calls against actual vessel movements.'),
+  body('Synthetic aperture radar satellites, including the European Space Agency\'s Sentinel-1 constellation and commercial providers like Capella Space and ICEYE, can detect vessels even when AIS transponders are disabled or spoofed, providing a compliance verification layer that is immune to the most common forms of AIS manipulation. The integration of SAR data with AIS feeds creates a multi-modal vessel detection capability that significantly enhances the compliance swarm\'s ability to identify dark shipping operations that may indicate sanctions evasion, illegal fishing, or smuggling.'),
+  body('Optical Earth observation satellites, with resolution capabilities reaching sub-metre levels from commercial providers such as Planet Labs and Maxar Technologies, enable visual verification of port operations, cargo handling activities, and environmental conditions. For compliance purposes, optical imagery can verify whether declared cargo operations match actual port activity, detect potential oil spills or environmental violations, and assess port infrastructure damage following natural disasters that may affect compliance obligations under force majeure provisions.'),
+
+  h2('3.2 Artificial Intelligence and Machine Learning Evolution'),
+  body('The current system\'s NER-based PII detection using spaCy represents the first step towards AI-native compliance. The next evolution involves transitioning from rule-based audit queries to learned compliance patterns that can identify violations that no human auditor has yet codified into a query. This requires the development of a compliance training pipeline that ingests historical audit findings, regulatory texts, and enforcement actions to train models capable of detecting novel violation patterns.'),
+  body('Large Language Models present both an opportunity and a challenge for maritime compliance. On the opportunity side, LLMs can interpret complex regulatory texts across multiple languages, extract compliance obligations from new regulations as they are published, and generate human-readable explanations of compliance findings for non-technical stakeholders. On the challenge side, LLM hallucination risks require a guardrail architecture where LLM-generated compliance assessments are always validated against the authoritative rule engine before being actioned.'),
+  body('Reinforcement learning offers a pathway towards autonomous remediation optimisation, where the system learns which remediation strategies are most effective for specific combinations of violation type, jurisdiction, data sensitivity, and partner characteristics. By modelling the remediation process as a sequential decision problem, the system can learn to select remediation actions that minimise MTTR while maximising the probability of first-pass verification, continuously improving its performance through feedback from the verification stage of the finding lifecycle.'),
+
+  h2('3.3 Event Sourcing and CQRS Architecture'),
+  body('The current database-backed event log provides the foundation for a full event sourcing architecture, where every state change in the compliance swarm is captured as an immutable event. Event sourcing enables complete temporal querying, allowing compliance officers to reconstruct the exact state of any finding, policy, or audit result at any point in time, which is essential for regulatory investigations that require demonstrating what the system knew and when it knew it.'),
+  body('Command Query Responsibility Segregation complements event sourcing by separating the write model, which enforces business rules and validates state transitions through the state machine, from the read model, which is optimised for the diverse query patterns required by the dashboard, reports, and analytics features. The current single-database approach works for development, but as query complexity and event volume grow with new data source integration, a separated read store using materialised views or a dedicated analytics database becomes essential for maintaining performance.'),
+
+  // ─── STRATEGIC ROADMAP 2025-2035 ───
+  h1('Strategic Roadmap: Six Evolution Horizons'),
+
+  h2('Horizon 1: Foundation Hardening (2025-2026)'),
+  body('The immediate horizon focuses on production readiness and the integration of the most critical missing data sources. This includes migrating from SQLite to PostgreSQL with PostGIS for spatial compliance queries, implementing the EU ETS carbon reporting audit domain with six new compliance queries covering MRV data validation, emissions registry reconciliation, and carbon credit tracking, and deploying the authentication middleware with JWT-based access control to secure the forty-five API endpoints for enterprise deployment.'),
+  body('The satellite AIS ingestion pipeline represents the highest-priority new capability. Using Apache Kafka for high-throughput message ingestion and PostgreSQL with PostGIS for spatial indexing, the swarm will be able to correlate vessel positions with declared routes, detect AIS transmission gaps that may indicate deliberate concealment, and cross-reference vessel movements with sanction lists and port state control inspection histories. The satellite_ingest.py module already provides the foundational framework, requiring production-grade hardening with error recovery, back-pressure management, and multi-provider failover.'),
+
+  makeTable(
+    ['Capability', 'Current State', 'Horizon 1 Target', 'Effort'],
+    [
+      ['Database', 'SQLite dev', 'PostgreSQL 16 + PostGIS 3.4', 'Medium'],
+      ['Authentication', 'Disabled (dev)', 'JWT + API key, RBAC', 'Medium'],
+      ['EU ETS Auditing', 'Not implemented', '6 audit queries, MRV integration', 'High'],
+      ['AIS Ingestion', 'Skeleton module', 'Kafka + PostGIS pipeline', 'High'],
+      ['Rate Limiting', 'In-memory token bucket', 'Redis-backed distributed', 'Low'],
+      ['Audit Logging', 'In-memory list', 'Event bus + persistent store', 'Medium'],
+    ]
+  ),
+  new Paragraph({ spacing: { before: 80, after: 200 }, children: [new TextRun({ text: 'Table 2: Horizon 1 Capability Gap Analysis', size: 21, color: '506070', font: { ascii: 'Times New Roman' }, italics: true })] }),
+
+  h2('Horizon 2: Intelligence Augmentation (2026-2027)'),
+  body('The second horizon introduces machine learning models that augment human compliance decision-making. The pluggable audit query registry evolves from a database-backed query store to a hybrid system where traditional SQL queries coexist with ML-based anomaly detectors. Statistical anomaly detection baselines the normal distributions of EDI message volumes, encryption protocol usage, and data retention patterns, flagging statistical outliers as potential compliance violations before they are explicitly codified in regulatory texts.'),
+  body('The compliance knowledge graph transitions from its current in-memory adjacency-list implementation to a production graph database such as Neo4j or Amazon Neptune, enabling complex multi-hop queries that identify cross-jurisdictional regulatory conflicts, trace obligation chains through the regulatory hierarchy, and perform impact analysis when new regulations are introduced. The current seed data covering five jurisdictions, ten regulations, seven data categories, eight obligations, and six compliance controls expands to include every applicable maritime regulation across all active trade lanes.'),
+  body('Weather-aware compliance intelligence reaches operational maturity in this horizon. The weather ingestion service, polling NOAA GFS and ECMWF ERA5 data every fifteen minutes, feeds into the compliance event bus through dedicated weather event types including PORT_CLOSURE, STORM_TRACK, and CANAL_BLOCKAGE. The reaction engine gains weather-correlated rules that automatically adjust finding severity based on active weather events, enter weather-hold mode for remediation SLAs during hurricanes and typhoons, and exclude force majeure periods from MTTR calculations to ensure fair compliance performance measurement.'),
+
+  h2('Horizon 3: Autonomous Operations (2027-2029)'),
+  body('The third horizon marks the transition from human-in-the-loop to human-on-the-loop compliance operations. Closed-loop remediation verification, where the system automatically re-audits after remediation is applied and escalates if the violation persists, becomes the default operational mode. The remediation decision matrix evolves from a static risk-category-to-action mapping to a learned model trained on historical finding-remediation-verification outcome triplets, continuously improving its accuracy through feedback from every completed finding lifecycle.'),
+  body('Multi-party orchestration capabilities address the cross-organisational nature of maritime compliance, where a single finding may require coordination between the carrier, the customs broker, the port authority, and the regulatory body. A workflow engine based on BPMN 2.0 or a lightweight statechart implementation manages these multi-party compliance processes, with each participant receiving task assignments, status updates, and deadline reminders through their preferred communication channels.'),
+  body('The MTTR tracker evolves from batch-oriented metrics calculation to real-time streaming analytics using Server-Sent Events for live dashboard updates. Time-series analysis capabilities including exponential moving averages, seasonal decomposition, and trend detection enable predictive MTTR estimation for new findings, allowing compliance managers to proactively allocate resources to findings that are predicted to exceed their SLA targets.'),
+
+  h2('Horizon 4: Predictive Intelligence (2029-2031)'),
+  body('Predictive compliance represents the most transformative capability in the roadmap. By analysing patterns across historical findings, regulatory changes, enforcement actions, and industry-wide compliance data, the swarm develops the ability to predict compliance violations before they occur. A violation prediction model, trained on the complete event-sourced history of every finding and remediation action, identifies combinations of conditions, such as approaching certificate expiry combined with recent partner onboarding and increased message volumes, that historically precede compliance failures.'),
+  body('Regulatory change impact analysis uses natural language processing to monitor regulatory publications from all five supported jurisdictions plus international bodies such as the IMO, the European Commission, and national maritime authorities. When a new regulation or amendment is detected, the system automatically analyses its impact on existing compliance controls, identifies gaps in the current audit query coverage, and generates a prioritised implementation plan that estimates the effort and risk reduction value of each required change.'),
+  body('Digital twin compliance modelling creates a virtual replica of the operator\'s compliance posture, enabling what-if analysis of proposed operational changes. Before opening a new trade lane, onboarding a new EDI partner, or changing data handling practices, the compliance team can simulate the impact on their risk profile, predict new finding types that may emerge, and pre-position remediation resources to address anticipated compliance gaps.'),
+
+  h2('Horizon 5: Ecosystem Integration (2031-2033)'),
+  body('The fifth horizon extends the compliance swarm beyond the boundaries of a single operator to participate in industry-wide compliance ecosystems. Inter-operator compliance data sharing, governed by privacy-preserving techniques such as federated learning and secure multi-party computation, enables the system to learn from industry-wide compliance patterns without exposing any individual operator\'s sensitive data. This collective intelligence approach significantly improves violation prediction accuracy and remediation effectiveness.'),
+  body('Regulatory technology sandbox integration enables the swarm to test compliance rule changes against a representative sample of industry data before formal adoption, reducing the risk of unintended compliance gaps when regulations change. Partnership with regulatory sandbox programmes operated by the UK FCA, Singapore MAS, and other innovation-friendly regulators provides early access to regulatory guidance and enables the swarm to influence the development of compliance technology standards.'),
+  body('Cross-border data governance automation addresses the operational complexity of transferring personal data between jurisdictions with different and sometimes conflicting requirements. The system automates the creation and maintenance of Standard Contractual Clauses, Binding Corporate Rules, and Transfer Impact Assessments required under GDPR Chapter V, while simultaneously ensuring compliance with the data localisation requirements that some jurisdictions impose. The compliance knowledge graph models these cross-border transfer rules as traversable paths, enabling automated compliance checking for any proposed data flow.'),
+
+  h2('Horizon 6: Autonomous Governance (2033-2035)'),
+  body('The final horizon envisions the compliance swarm as a fully autonomous governance platform that manages the majority of compliance operations without human intervention for routine matters, while escalating genuinely novel or high-stakes situations to human compliance officers. The system\'s decision-making authority is bounded by a compliance governance framework that defines the types of decisions the system can make autonomously, the risk thresholds that trigger human review, and the audit trail requirements that ensure accountability.'),
+  body('Self-healing compliance capabilities enable the system to not only detect and remediate violations but also to modify its own configuration, update audit queries, and adjust risk scoring weights in response to observed patterns. For example, if the system detects that a particular audit query is generating a high false-positive rate, it can automatically refine the query parameters, test the refined version against historical data, and deploy the improved version without human intervention, while maintaining a complete audit trail of the modification.'),
+  body('Quantum-resistant cryptography preparation addresses the long-term threat that quantum computing poses to the cryptographic primitives underpinning maritime compliance, particularly the HMAC-SHA256 tokenisation and Fernet encryption used by the PII anonymiser. The swarm begins integrating post-quantum cryptographic algorithms, such as those standardised by NIST in 2024, alongside classical algorithms through a hybrid cryptography approach that maintains backward compatibility while providing quantum resistance for data that must remain protected for decades.'),
+
+  // ─── DECISION FRAMEWORK ───
+  h1('Investment and Decision Framework'),
+
+  h2('Resource Allocation Strategy'),
+  body('Investment across the six horizons follows a front-loaded model, with the most critical capabilities receiving the highest resource allocation in the early horizons. Horizon 1 receives approximately thirty-five percent of the total investment budget, reflecting the urgency of production hardening, EU ETS compliance, and AIS integration. Horizons 2 and 3 each receive approximately twenty percent, covering the transition from rule-based to learning-based compliance and the operationalisation of autonomous remediation. The remaining horizons share the final twenty-five percent, with increasing allocation as the technology matures and ROI becomes more predictable.'),
+  body('The technology stack evolution follows a pragmatic progression from the current Python plus Golang polyglot architecture. Python remains the primary language for the gateway, audit, anonymisation, and remediation components due to its rich ecosystem of data processing, machine learning, and NLP libraries. Golang continues to serve the MTTR tracker and will expand to handle the AIS ingestion pipeline and event sourcing components where its concurrency model and performance characteristics provide significant advantages. Rust is introduced in Horizon 3 for performance-critical components such as the composite risk scoring engine and the graph query optimiser, where memory safety and zero-cost abstractions are essential.'),
+
+  makeTable(
+    ['Horizon', 'Period', 'Key Investment', 'Expected ROI Indicator'],
+    [
+      ['H1: Foundation', '2025-2026', 'PostGIS, EU ETS, AIS pipeline', 'Audit coverage: 5 to 8 domains'],
+      ['H2: Intelligence', '2026-2027', 'ML anomaly, graph DB, weather', 'False positive reduction: 20-30%'],
+      ['H3: Autonomous', '2027-2029', 'Closed-loop, orchestration, SSE', 'MTTR improvement: 40-50%'],
+      ['H4: Predictive', '2029-2031', 'Violation prediction, NLP', 'Preventive findings: >30%'],
+      ['H5: Ecosystem', '2031-2033', 'Federated learning, sandbox', 'Cross-operator accuracy +25%'],
+      ['H6: Governance', '2033-2035', 'Self-healing, quantum crypto', 'Autonomous resolution: >80%'],
+    ]
+  ),
+  new Paragraph({ spacing: { before: 80, after: 200 }, children: [new TextRun({ text: 'Table 3: Investment Allocation and ROI Indicators by Horizon', size: 21, color: '506070', font: { ascii: 'Times New Roman' }, italics: true })] }),
+
+  h2('Risk Mitigation'),
+  body('The primary technical risk is the complexity of integrating multiple new data sources without degrading the performance and reliability of existing compliance operations. This is mitigated through a strangler fig migration pattern, where new data source integrations are developed and tested alongside the existing system before gradually redirecting traffic, ensuring that no single integration failure can disrupt established compliance workflows.'),
+  body('Regulatory risk is addressed through the knowledge graph\'s impact analysis capability, which enables the system to assess the compliance impact of regulatory changes as soon as they are announced, providing compliance teams with early warning and implementation planning support. The graph\'s traversal queries identify all regulations, obligations, and controls affected by a regulatory change, enabling precise scoping of the required system modifications.'),
+  body('Data quality risk, particularly for new data sources such as AIS and IoT sensor data, is mitigated through a data quality framework that classifies incoming data by reliability level, applies appropriate validation rules for each level, and flags data quality issues as potential compliance concerns. AIS data from satellite providers is classified as high-reliability for positional accuracy but lower reliability for vessel identification, while IoT sensor data quality varies by sensor type, manufacturer, and environmental conditions.'),
 ];
 
-// ── Document Assembly ──
+// ─── Build Document ───
 const doc = new Document({
   styles: {
-    default: {
-      document: {
-        run: { font: { ascii: 'Times New Roman', eastAsia: 'SimSun' }, size: 24, color: c(P.body) },
-        paragraph: { spacing: { line: 312 } }
-      }
-    },
-    heading1: {
-      run: { font: { ascii: 'Times New Roman', eastAsia: 'SimHei' }, size: 32, bold: true, color: c(P.primary) },
-      paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 480, after: 200, line: 312 } }
-    },
-    heading2: {
-      run: { font: { ascii: 'Times New Roman', eastAsia: 'SimHei' }, size: 30, bold: true, color: c(P.primary) },
-      paragraph: { spacing: { before: 360, after: 160, line: 312 } }
-    },
-    heading3: {
-      run: { font: { ascii: 'Times New Roman', eastAsia: 'SimHei' }, size: 28, bold: true, color: c(P.primary) },
-      paragraph: { spacing: { before: 280, after: 120, line: 312 } }
-    }
+    default: { document: {
+      run: { font: { ascii: 'Times New Roman' }, size: 24, color: '000000' },
+      paragraph: { spacing: { line: 312 } },
+    }},
+    heading1: { run: { font: { ascii: 'Times New Roman' }, size: 32, bold: true, color: '162235' },
+      paragraph: { spacing: { before: 400, after: 200 } } },
+    heading2: { run: { font: { ascii: 'Times New Roman' }, size: 28, bold: true, color: '1B6B7A' },
+      paragraph: { spacing: { before: 300, after: 160 } } },
+    heading3: { run: { font: { ascii: 'Times New Roman' }, size: 26, bold: true, color: '162235' },
+      paragraph: { spacing: { before: 240, after: 120 } } },
   },
   sections: [
-    // Section 1: Cover (no page number, no header/footer)
-    {
-      properties: {
-        page: {
-          size: { width: 11906, height: 16838 },
-          margin: { top: 0, bottom: 0, left: 0, right: 0 }
-        }
-      },
-      children: buildCover()
-    },
-    // Section 2: TOC (Roman page numbers)
-    {
-      properties: {
-        type: SectionType.NEXT_PAGE,
-        page: {
-          size: { width: 11906, height: 16838 },
-          margin: { top: 1440, bottom: 1440, left: 1701, right: 1417 },
-          pageNumbers: { start: 1, formatType: NumberFormat.UPPER_ROMAN }
-        }
-      },
-      footers: {
-        default: new Footer({
-          children: [new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [new TextRun({ size: 18, color: P.footerColor,
-              children: [{ type: 'instrText', text: 'PAGE \\* ROMAN \\* MERGEFORMAT' }] })]
-          })]
-        })
-      },
+    // Cover section
+    { properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 0, bottom: 0, left: 0, right: 0 } } },
+      children: buildCoverR1(coverConfig) },
+    // TOC section
+    { properties: { type: SectionType.NEXT_PAGE, page: { size: { width: 11906, height: 16838 },
+        margin: { top: 1440, bottom: 1440, left: 1701, right: 1417 } } },
       children: [
-        new Paragraph({
-          spacing: { before: 200, after: 200, line: 312 },
-          children: [new TextRun({ text: 'Contents', bold: true, size: 36, color: c(P.primary),
-            font: { ascii: 'Times New Roman', eastAsia: 'SimHei' } })]
-        }),
-        new TableOfContents('Table of Contents', {
-          hyperlink: true,
-          headingStyleRange: '1-2'
-        }),
-        new Paragraph({
-          spacing: { before: 200, after: 200 },
-          children: [new TextRun({ text: 'Right-click the table of contents and select \u201cUpdate Field\u201d to refresh page numbers.',
-            italics: true, size: 20, color: '808080',
-            font: { ascii: 'Times New Roman' } })]
-        }),
-        new Paragraph({ children: [new PageBreak()] })
+        new Paragraph({ children: [new TextRun({ text: 'Table of Contents', bold: true, size: 32, color: '162235', font: { ascii: 'Times New Roman' } })], spacing: { after: 200 } }),
+        new TableOfContents('TOC', { hyperlink: true, headingStyleRange: '1-3' }),
+        new Paragraph({ children: [new TextRun({ text: 'Note: Right-click the table of contents and select "Update Field" to refresh page numbers.', italics: true, size: 21, color: '808080', font: { ascii: 'Times New Roman' } })], spacing: { before: 200 } }),
+        new Paragraph({ children: [new PageBreak()] }),
       ]
     },
-    // Section 3: Body (Arabic page numbers from 1)
-    {
-      properties: {
-        type: SectionType.NEXT_PAGE,
-        page: {
-          size: { width: 11906, height: 16838 },
-          margin: { top: 1440, bottom: 1440, left: 1701, right: 1417 },
-          pageNumbers: { start: 1, formatType: NumberFormat.DECIMAL }
-        }
-      },
-      headers: {
-        default: new Header({
-          children: [new Paragraph({
-            alignment: AlignmentType.RIGHT,
-            children: [new TextRun({ text: 'Strategic Evolution Roadmap', size: 18, color: '808080',
-              font: { ascii: 'Times New Roman' } })]
-          })]
-        })
-      },
-      footers: {
-        default: new Footer({
-          children: [new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [new TextRun({ children: [PageNumber.CURRENT], size: 18, color: '808080' })]
-          })]
-        })
-      },
-      children: bodyContent
-    }
-  ]
+    // Body section
+    { properties: { type: SectionType.NEXT_PAGE, page: { size: { width: 11906, height: 16838 },
+        margin: { top: 1440, bottom: 1440, left: 1701, right: 1417 },
+        pageNumbers: { start: 1 } } },
+      footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER,
+        children: [new TextRun({ text: 'Page ', size: 18, color: '506070', font: { ascii: 'Times New Roman' } }),
+          new TextRun({ children: [PageNumber.CURRENT], size: 18, color: '506070', font: { ascii: 'Times New Roman' } })] })] }) },
+      children: bodyContent,
+    },
+  ],
 });
 
+// Generate
 Packer.toBuffer(doc).then(buf => {
-  fs.writeFileSync('/home/z/my-project/download/Strategic_Roadmap_Maritime_Compliance_Swarm.docx', buf);
-  console.log('DOCX generated successfully');
-}).catch(err => {
-  console.error('Error:', err);
-  process.exit(1);
+  fs.writeFileSync('/home/z/my-project/download/Maritime_Compliance_Swarm_Strategic_Roadmap_2025-2035.docx', buf);
+  console.log('Strategic Roadmap DOCX generated successfully.');
 });
