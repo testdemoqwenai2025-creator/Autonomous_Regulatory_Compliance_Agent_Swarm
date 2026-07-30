@@ -1,5 +1,5 @@
-// This is your Prisma schema file,
-// learn more at it in the docs: https://pris.ly/d/prisma-schema
+// Maritime Global Compliance Swarm - Full Data Model
+// Prisma Schema v3.0
 
 generator client {
   provider = "prisma-client-js"
@@ -10,83 +10,302 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  CORE USERS & AUTH
+// ═══════════════════════════════════════════════════════════════
+
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-/// Tracks every request flowing through the middleware -> API -> DB pipeline
-model SystemEvent {
   id            String   @id @default(cuid())
-  requestId     String              /// unique request ID injected by middleware
-  path          String              /// API path called
-  method        String              /// HTTP method
-  middlewareTs   DateTime            /// timestamp when middleware intercepted
-  handlerTs     DateTime            /// timestamp when API handler processed
-  dbWriteTs     DateTime?           /// timestamp when DB write completed (null if read-only)
-  dbReadMs      Int?                /// DB read latency in ms
-  statusCode    Int                 /// HTTP response status
-  clientIp      String?             /// client IP captured by middleware
-  userAgent     String?             /// browser user-agent from middleware
-  layerTrace    String              /// JSON: which layers were touched
+  email         String   @unique
+  name          String?
+  role          String   @default("viewer")  // viewer | analyst | operator | admin
+  apiKey        String?  @unique
+  apiKeyHash    String?
+  lastLoginAt   DateTime?
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  auditLog      AuditLog[]
 }
 
-/// Stores system component health snapshots written by the API and read back for verification
-model ComponentHealth {
-  id          String   @id @default(cuid())
-  component   String               /// e.g. "database", "middleware", "api", "browser"
-  status      String               /// "healthy" | "degraded" | "down"
-  latencyMs   Int                  /// response time in ms
-  details     String               /// JSON with extra info
-  checkedAt   DateTime @default(now())
-}
+// ═══════════════════════════════════════════════════════════════
+//  COMPLIANCE FINDINGS
+// ═══════════════════════════════════════════════════════════════
 
-/// Stores correlated client+server traces for a single request round-trip.
-/// The browser sends its timings in x-client-timing header; the server
-/// appends its own middleware/handler/DB timings and persists the full trace.
-model CorrelatedTrace {
+model ComplianceFinding {
   id              String   @id @default(cuid())
-  requestId       String              /// matches x-request-id from middleware
+  findingRef      String   @unique
+  severity        String   // critical | high | medium | low | info
+  status          String   @default("open")  // open | in_progress | remediated | accepted_risk | false_positive | closed
+  riskCategory    String   // pii_exposure | unencrypted_transmission | missing_customs_doc | edi_non_compliance | data_retention_violation | access_control_breach | cert_expiry | carbon_reporting
+  title           String
+  description     String   @default("")
+  affectedSystem  String   @default("FMS")
+  affectedTable   String   @default("")
+  affectedRowCount Int    @default(0)
+  evidence        String   @default("{}")  // JSON
+  currentPhase    String   @default("detected")  // detected | triaged | assigned | in_remediation | awaiting_verification | verified | escalated | risk_accepted | closed
+  weatherContext  String   @default("null")  // JSON or null
+  jurisdiction    String   @default("GDPR")
+  detectedAt      DateTime @default(now())
+  remediatedAt    DateTime?
+  verifiedAt      DateTime?
+  closedAt        DateTime?
+  mttrHours       Float?
+  riskScore       Float    @default(0)
+
+  transitions     FindingTransition[]
+  reactions       ReactionLog[]
+  dataSource      DataSource?    @relation(fields: [dataSourceId], references: [id])
+  dataSourceId    String?
+}
+
+model FindingTransition {
+  id              String   @id @default(cuid())
+  findingId       String
+  fromState       String
+  toState         String
+  trigger         String   // manual_triage | manual_assign | remediation_submitted | verification_passed | auto_escalate_timeout | manual_close | risk_accept | mark_false_positive
+  actor           String   @default("system")
+  contextPayload  String   @default("{}")  // JSON
+  autoEscalated   Boolean  @default(false)
+  timeoutHours    Int?
+  createdAt       DateTime @default(now())
+
+  finding         ComplianceFinding @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  @@index([findingId])
+  @@index([toState])
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  EDI PROFILES & MASKING POLICIES
+// ═══════════════════════════════════════════════════════════════
+
+model EdiConnectionProfile {
+  id              String   @id @default(cuid())
+  partnerId       String
+  partnerName     String
+  ediStandard     String   // EDIFACT | ANSI_X12 | BAPLIE | VGM | COPARN | IFTMBC | CUSTOMS
+  encrypted       Boolean  @default(false)
+  protocol        String   @default("None")
+  tlsVersion      String?
+  certExpiry      DateTime?
+  lastAudit       DateTime?
+  compliant       Boolean  @default(true)
+  issues          String   @default("[]")  // JSON array
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model MaskingPolicy {
+  id              String   @id @default(cuid())
+  name            String
+  fieldName       String
+  action          String   // tokenise | redact | generalise | pseudonymise | encrypt | truncate
+  category        String?  // consignee_identity | shipper_identity | contact_info | financial_id | government_id | location
+  gdprArticle     String   @default("")
+  enabled         Boolean  @default(true)
+  autoGenerated   Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  EVENT BUS & REACTIONS
+// ═══════════════════════════════════════════════════════════════
+
+model ComplianceEvent {
+  id              String   @id @default(cuid())
+  eventType       String   // FINDING_CREATED | FINDING_STATE_CHANGED | AUDIT_COMPLETE | WEATHER_HOLD | REMEDIATION_APPLIED etc
+  source          String   @default("system")
+  correlationId   String?
+  payload         String   @default("{}")  // JSON
+  processed       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  reactions       ReactionLog[]
+
+  @@index([eventType])
+  @@index([processed])
+}
+
+model ReactionLog {
+  id              String   @id @default(cuid())
+  ruleId          String
+  ruleName        String
+  eventType       String
+  findingId       String?
+  actionTaken     String
+  success         Boolean  @default(true)
+  details         String   @default("{}")  // JSON
+  createdAt       DateTime @default(now())
+
+  finding         ComplianceFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  event           ComplianceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId         String
+
+  @@index([ruleId])
+  @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MTTR TRACKING
+// ═══════════════════════════════════════════════════════════════
+
+model MttrEvent {
+  id              String   @id @default(cuid())
+  findingRef      String
+  phase           String   // identified | triaged | assigned | in_progress | awaiting_verification | resolved | verified | escalated | closed
+  eventTs         DateTime @default(now())
+  severity        String?
+  riskCategory    String?
+
+  @@index([findingRef])
+  @@index([phase])
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DATA SOURCE INTEGRATION
+// ═══════════════════════════════════════════════════════════════
+
+model DataSource {
+  id              String   @id @default(cuid())
+  name            String   // AIS | PCS | EU_ETS | BLOCKCHAIN_EBL | IOT_SENSOR | SATELLITE | FMS | CUSTOMS_SINGLE_WINDOW
+  type            String   // stream | api | poll | webhook
+  protocol        String   @default("rest")  // rest | mqtt | kafka | websocket | nmea
+  endpoint        String?
+  status          String   @default("active")  // active | degraded | down | pending
+  lastIngestedAt  DateTime?
+  recordCount     Int      @default(0)
+  errorCount      Int      @default(0)
+  config          String   @default("{}")  // JSON
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  findings        ComplianceFinding[]
+  ingestLogs      DataIngestLog[]
+}
+
+model DataIngestLog {
+  id              String   @id @default(cuid())
+  dataSourceId    String
+  status          String   // success | error | partial
+  recordsIngested Int      @default(0)
+  recordsFailed   Int      @default(0)
+  errorMessage    String?
+  durationMs      Int?
+  createdAt       DateTime @default(now())
+
+  dataSource      DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+
+  @@index([dataSourceId])
+  @@index([status])
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ANOMALY DETECTION
+// ═══════════════════════════════════════════════════════════════
+
+model AnomalyRecord {
+  id              String   @id @default(cuid())
+  metricName      String   // edi_volume | pii_density | transmission_failures | cert_expiry_days
+  dataSource      String?
+  baselineValue   Float
+  observedValue   Float
+  zScore          Float
+  threshold       Float   @default(2.0)
+  severity        String   @default("info")  // info | warning | critical
+  acknowledged    Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([metricName])
+  @@index([severity])
+  @@index([acknowledged])
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  AUDIT LOG & OBSERVABILITY
+// ═══════════════════════════════════════════════════════════════
+
+model AuditLog {
+  id              String   @id @default(cuid())
+  userId          String?
+  action          String
+  resource        String
+  details         String   @default("{}")  // JSON
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime @default(now())
+
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model SystemEvent {
+  id              String   @id @default(cuid())
+  requestId       String
   path            String
   method          String
+  middlewareTs     DateTime
+  handlerTs       DateTime
+  dbWriteTs       DateTime?
+  dbReadMs        Int?
   statusCode      Int
-
-  // -- Client-side (browser) timings --
-  clientFetchStart    String          /// ISO timestamp: when fetch() was called
-  clientTtfbMs         Int             /// Time to First Byte (ms) — measured by browser
-  clientRoundTripMs    Int             /// Total round-trip from fetch() to JSON parsed (ms)
-  clientJsonParseMs    Int             /// Time to parse JSON body (ms)
-  clientRenderStartMs  Int             /// Time from fetch start to React state update (ms)
-  clientNetworkProtocol String         /// e.g. "h2", "http/1.1"
-  clientTimingJson    String          /// Full raw browser timing JSON
-
-  // -- Server-side timings --
-  serverMiddlewareStartTs  String       /// ISO: middleware entry
-  serverMiddlewareEndTs    String       /// ISO: middleware exit
-  serverMiddlewareMs       Int          /// middleware processing time (ms)
-  serverHandlerStartTs     String       /// ISO: API handler entry
-  serverHandlerEndTs       String       /// ISO: API handler exit
-  serverHandlerMs          Int          /// total handler time (ms)
-  serverDbWriteMs          Int          /// DB write latency (ms)
-  serverDbReadMs           Int          /// DB read latency (ms)
-
-  // -- Correlation --
-  clientServerDeltaMs  Int              /// How far apart client & server clocks are (ms)
-  totalEndToEndMs      Int              /// Full client round-trip (authoritative)
-
+  clientIp        String?
+  userAgent       String?
+  layerTrace      String   @default("{}")
   createdAt       DateTime @default(now())
+}
+
+model ComponentHealth {
+  id              String   @id @default(cuid())
+  component       String
+  status          String
+  latencyMs        Int
+  details         String   @default("{}")
+  checkedAt       DateTime @default(now())
+}
+
+model CorrelatedTrace {
+  id                      String   @id @default(cuid())
+  requestId               String
+  path                    String
+  method                  String
+  statusCode              Int
+  clientFetchStart        String
+  clientTtfbMs            Int
+  clientRoundTripMs       Int
+  clientJsonParseMs       Int
+  clientRenderStartMs     Int
+  clientNetworkProtocol   String
+  clientTimingJson        String
+  serverMiddlewareStartTs String
+  serverMiddlewareEndTs   String
+  serverMiddlewareMs      Int
+  serverHandlerStartTs    String
+  serverHandlerEndTs      String
+  serverHandlerMs         Int
+  serverDbWriteMs         Int
+  serverDbReadMs          Int
+  clientServerDeltaMs     Int
+  totalEndToEndMs         Int
+  createdAt               DateTime @default(now())
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RATE LIMITING
+// ═══════════════════════════════════════════════════════════════
+
+model RateLimitEntry {
+  id              String   @id @default(cuid())
+  clientIp        String
+  path            String
+  requestCount    Int      @default(1)
+  windowStart     DateTime @default(now())
+
+  @@index([clientIp, path, windowStart])
 }
