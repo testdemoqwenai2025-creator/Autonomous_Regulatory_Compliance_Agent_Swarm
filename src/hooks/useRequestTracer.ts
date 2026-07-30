@@ -84,7 +84,7 @@ export interface TraceStats {
 
 // ── Connection info helper ──
 function getConnectionInfo() {
-  const nav = navigator as Record<string, unknown>;
+  const nav = navigator as unknown as Record<string, unknown>;
   const conn = (nav.connection as Record<string, unknown>) ?? {};
   return {
     effectiveType: (conn.effectiveType as string) ?? 'unknown',
@@ -97,7 +97,7 @@ function getConnectionInfo() {
 // ── Navigation type helper ──
 function getNavigationType(): string {
   try {
-    const entries = performance.getEntriesByType?.('navigation') as Array<{ type: string }> | undefined;
+    const entries = performance.getEntriesByType?.('navigation') as unknown as Array<{ type: string }> | undefined;
     if (entries?.[0]) return entries[0].type;
   } catch { /* not available */ }
   return 'unknown';
@@ -178,26 +178,26 @@ export function useRequestTracer() {
   // ── Extract Resource Timing data for a specific URL ──
   const getResourceTiming = useCallback((url: string): ResourceTimingEntry | null => {
     try {
-      const entries = performance.getEntriesByName(url, 'resource') as unknown as PerformanceResourceTiming[];
+      const entries = performance.getEntriesByName(url, 'resource') as unknown as Array<Record<string, unknown>>;
       if (!entries.length) return null;
-      const e = entries[entries.length - 1]; // latest
+      const e = entries[entries.length - 1] as Record<string, unknown>; // latest
       return {
-        name: e.name,
-        duration: Math.round(e.duration),
-        transferSize: e.transferSize,
-        encodedBodySize: e.encodedBodySize,
-        decodedBodySize: e.decodedBodySize,
-        initiatorType: e.initiatorType,
-        startTime: Math.round(e.startTime),
-        responseStart: Math.round(e.responseStart),
-        connectStart: Math.round(e.connectStart),
-        connectEnd: Math.round(e.connectEnd),
-        dnsStart: Math.round(e.dnsStart),
-        dnsEnd: Math.round(e.dnsEnd),
-        secureConnectionStart: Math.round(e.secureConnectionStart),
-        requestStart: Math.round(e.requestStart),
-        responseEnd: Math.round(e.responseEnd),
-        nextHopProtocol: e.nextHopProtocol,
+        name: (e.name as string) ?? url,
+        duration: Math.round(e.duration as number),
+        transferSize: (e.transferSize as number) ?? 0,
+        encodedBodySize: (e.encodedBodySize as number) ?? 0,
+        decodedBodySize: (e.decodedBodySize as number) ?? 0,
+        initiatorType: (e.initiatorType as string) ?? 'fetch',
+        startTime: Math.round(e.startTime as number),
+        responseStart: Math.round(e.responseStart as number),
+        connectStart: Math.round(e.connectStart as number),
+        connectEnd: Math.round(e.connectEnd as number),
+        dnsStart: Math.round((e.domainLookupStart ?? e.dnsStart) as number),
+        dnsEnd: Math.round((e.domainLookupEnd ?? e.dnsEnd) as number),
+        secureConnectionStart: Math.round(e.secureConnectionStart as number),
+        requestStart: Math.round(e.requestStart as number),
+        responseEnd: Math.round(e.responseEnd as number),
+        nextHopProtocol: (e.nextHopProtocol as string) ?? '',
       };
     } catch {
       return null;
@@ -217,7 +217,8 @@ export function useRequestTracer() {
 
       // Clear any previous entry for this URL to ensure we get a fresh one
       try {
-        performance.clearResourceTimings(url);
+        const perfAny = performance as unknown as { clearResourceTimings?: (name?: string) => void };
+        perfAny.clearResourceTimings?.(url);
       } catch { /* ignore */ }
 
       const res = await fetch(url, options);

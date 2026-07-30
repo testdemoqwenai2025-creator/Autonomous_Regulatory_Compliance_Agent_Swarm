@@ -177,7 +177,7 @@ export async function POST(request: NextRequest) {
 
   // Write ComponentHealth for all observed components
   const componentsToTrack = [
-    { component: 'browser', status: 'healthy' as const, latencyMs: clientRoundTripMs, details: JSON.stringify({ ttfbMs, source: (clientTiming.source as string) ?? 'trace' }) },
+    { component: 'browser', status: 'healthy' as const, latencyMs: clientRoundTripMs, details: JSON.stringify({ clientTtfbMs, source: (clientTiming.source as string) ?? 'trace' }) },
     { component: 'middleware', status: mwHit === 'true' ? 'healthy' as const : 'degraded' as const, latencyMs: mwMs, details: JSON.stringify({ requestId, mwStart, mwEnd }) },
     { component: 'correlated_trace_api', status: 'healthy' as const, latencyMs: bodyParseMs, details: JSON.stringify({ handlerStartTs, endpoint: '/api/system/correlated-trace' }) },
   ];
@@ -255,9 +255,10 @@ export async function POST(request: NextRequest) {
     message: 'Browser timing correlated with server-side trace and persisted',
     traceId: traceRecord.id,
     requestId,
+    clientTimingJson: JSON.stringify(enrichedTiming),
     client: {
       fetchStart: clientFetchStart,
-      ttfbMs,
+      ttfbMs: clientTtfbMs,
       roundTripMs: clientRoundTripMs,
       jsonParseMs: clientJsonParseMs,
       renderStartMs: clientRenderStartMs,

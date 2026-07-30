@@ -86,6 +86,7 @@ interface StoredTrace {
 
 interface CorrelatedTraceResult {
   status: string; message: string; traceId: string; requestId: string;
+  clientTimingJson: string;
   client: {
     fetchStart: string; ttfbMs: number; roundTripMs: number; jsonParseMs: number;
     renderStartMs: number; networkProtocol: string; navigationType: string;
@@ -388,6 +389,88 @@ export default function ComplianceDashboard() {
     }
   }, [postPayload, loadTraceHistory]);
 
+  // ── CORRELATED TRACE: trace+persist using the useRequestTracer hook ──
+  const runCorrelatedTrace = useCallback(async () => {
+    setCorrelatedLoading(true);
+    setCorrelatedError(null);
+    try {
+      const result = await traceAndPersist<CorrelatedTraceResult>(
+        '/api/system/correlated-trace',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source: 'frontend_trace_tab', component: 'CorrelatedTracePanel' }),
+          source: 'frontend_trace_tab',
+          component: 'CorrelatedTracePanel',
+        },
+      );
+      setCorrelatedResult(result.data);
+    } catch (e) {
+      setCorrelatedError(e instanceof Error ? e.message : 'Correlated trace failed');
+    } finally {
+      setCorrelatedLoading(false);
+    }
+  }, [traceAndPersist]);
+
+  // ── Batch trace: trace ALL compliance endpoints at once ──
+  const [batchResults, setBatchResults] = useState<Array<{ url: string; ttfbMs: number; roundTripMs: number; protocol: string }>>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  const runBatchTrace = useCallback(async () => {
+    setBatchLoading(true);
+    try {
+      const endpoints = [
+        '/api/compliance/health',
+        '/api/compliance/findings',
+        '/api/compliance/mttr',
+        '/api/compliance/policies',
+        '/api/compliance/profiles',
+      ];
+      const start = performance.now();
+      const results = await Promise.all(
+        endpoints.map(async (url) => {
+          const fetchStart = performance.now();
+          const fetchStartIso = new Date().toISOString();
+          try {
+            const perfAny = performance as unknown as { clearResourceTimings?: (name?: string) => void };
+            perfAny.clearResourceTimings?.(url);
+          } catch { /* ignore */ }
+          const res = await fetch(url);
+          const ttfbMs = Math.round(performance.now() - fetchStart);
+          const _ = await res.json(); // consume body
+          const roundTripMs = Math.round(performance.now() - fetchStart);
+          const rt = getResourceTiming(url);
+          return { url, ttfbMs, roundTripMs, protocol: rt?.nextHopProtocol ?? '' };
+        }),
+      );
+      const batchTotal = Math.round(performance.now() - start);
+      setBatchResults([...results, { url: `TOTAL (${endpoints.length} parallel)`, ttfbMs: batchTotal, roundTripMs: batchTotal, protocol: '' }]);
+    } catch (e) {
+      console.error('Batch trace error', e);
+    } finally {
+      setBatchLoading(false);
+    }
+  }, [getResourceTiming]);
+
+  const loadTraceSummary = useCallback(async () => {
+    setTraceSummaryLoading(true);
+    try {
+      const res = await fetch('/api/system/correlated-trace?mode=summary');
+      setTraceSummary(await res.json());
+    } catch (e) { console.error(e); }
+    finally { setTraceSummaryLoading(false); }
+  }, []);
+
+  const loadFullTraceHistory = useCallback(async () => {
+    setFullHistoryLoading(true);
+    try {
+      const res = await fetch('/api/system/correlated-trace?mode=history');
+      const data = await res.json();
+      setFullTraceHistory(data.traces ?? []);
+    } catch (e) { console.error(e); }
+    finally { setFullHistoryLoading(false); }
+  }, []);
+
   const overall = mttr?.report.overall;
   const openCritical = findings.filter(f => f.severity === 'critical' && (f.status === 'open' || f.status === 'in_progress')).length;
 
@@ -444,6 +527,45 @@ export default function ComplianceDashboard() {
     ];
   };
 
+  // Build waterfall from CorrelatedTraceResult (the new dedicated endpoint)
+  const buildCorrelatedWaterfall = (r: CorrelatedTraceResult): WaterfallRow[] => {
+    const c = r.client;
+    const s = r.server;
+    const corr = r.correlation;
+    const rows: WaterfallRow[] = [];
+    const totalMs = Math.max(c.roundTripMs, corr.serverTotalMs, 1);
+    const mwMs = s.middleware.durationMs;
+    const handlerMs = s.handler.durationMs;
+    const serverTotalEstimate = mwMs + handlerMs;
+    const networkWait = Math.max(0, c.ttfbMs - serverTotalEstimate);
+
+    // Browser-side phases
+    rows.push({ label: 'Browser: fetch()', color: 'bg-sky-400', startMs: 0, widthMs: Math.max(1, networkWait), detail: 'Network queue + transit' });
+    rows.push({ label: 'Middleware', color: 'bg-amber-400', startMs: networkWait, widthMs: mwMs, detail: `${s.middleware.status} (${mwMs}ms)` });
+    rows.push({ label: 'API Handler', color: 'bg-violet-500', startMs: networkWait + mwMs, widthMs: handlerMs, detail: `${s.handler.endpoint}` });
+    rows.push({ label: 'DB Write', color: 'bg-emerald-500', startMs: networkWait + mwMs + 2, widthMs: s.database.writeMs, detail: `${s.database.recordsWritten} records` });
+    // Resource Timing phases (if available)
+    if (c.resourceTiming) {
+      const rt = c.resourceTiming;
+      if (rt.dnsMs > 0) rows.push({ label: 'DNS Lookup', color: 'bg-pink-300', startMs: 0, widthMs: rt.dnsMs, detail: `${rt.dnsMs}ms` });
+      if (rt.tcpMs > 0) rows.push({ label: 'TCP Connect', color: 'bg-indigo-300', startMs: rt.dnsMs, widthMs: rt.tcpMs, detail: `${rt.tcpMs}ms` });
+      if (rt.sslMs > 0) rows.push({ label: 'TLS/SSL', color: 'bg-yellow-300', startMs: rt.dnsMs + rt.tcpMs, widthMs: rt.sslMs, detail: `${rt.sslMs}ms` });
+      if (rt.requestMs > 0) rows.push({ label: 'Server Wait', color: 'bg-orange-300', startMs: c.ttfbMs - rt.requestMs, widthMs: rt.requestMs, detail: `${rt.requestMs}ms` });
+      if (rt.responseMs > 0) rows.push({ label: 'Download', color: 'bg-cyan-300', startMs: c.ttfbMs, widthMs: rt.responseMs, detail: `${rt.transferSize}B` });
+    }
+    rows.push({ label: 'JSON Parse', color: 'bg-orange-400', startMs: c.ttfbMs, widthMs: Math.max(1, c.jsonParseMs), detail: `${c.jsonParseMs}ms` });
+    rows.push({ label: 'React Render', color: 'bg-rose-400', startMs: c.renderStartMs - 1, widthMs: Math.max(1, c.roundTripMs - c.renderStartMs + 1), detail: 'State update + paint' });
+    return rows;
+  };
+
+  const correlatedWaterfall = correlatedResult ? buildCorrelatedWaterfall(correlatedResult) : [];
+
+  // Memoize observed resources sorted by duration (slowest first)
+  const sortedObserved = useMemo(
+    () => [...observedResources].sort((a, b) => b.duration - a.duration),
+    [observedResources],
+  );
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/80 backdrop-blur-md">
@@ -489,8 +611,9 @@ export default function ComplianceDashboard() {
 
         {/* Tabs */}
         <Tabs defaultValue="pipeline" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="pipeline" className="text-xs sm:text-sm">Pipeline</TabsTrigger>
+            <TabsTrigger value="frontend-trace" className="text-xs sm:text-sm flex items-center gap-1"><MousePointerClick className="w-3 h-3" />Frontend Trace</TabsTrigger>
             <TabsTrigger value="findings" className="text-xs sm:text-sm">Findings</TabsTrigger>
             <TabsTrigger value="mttr" className="text-xs sm:text-sm">MTTR</TabsTrigger>
             <TabsTrigger value="profiles" className="text-xs sm:text-sm">EDI Profiles</TabsTrigger>
@@ -649,6 +772,268 @@ export default function ComplianceDashboard() {
             )}
           </TabsContent>
 
+          {/* ══════════ FRONTEND TRACE TAB ══════════ */}
+          <TabsContent value="frontend-trace" className="space-y-4">
+
+            {/* ── Section Header ── */}
+            <Card><CardHeader className="pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2"><MousePointerClick className="w-4 h-4" />Frontend Browser-Side Trace</CardTitle>
+                  <CardDescription>Captures browser Performance API timings (Resource Timing, Navigation Timing) and correlates with server-side middleware/handler/DB traces across ALL site components</CardDescription>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button size="sm" onClick={runCorrelatedTrace} disabled={correlatedLoading}>{correlatedLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Radio className="mr-1.5 h-3.5 w-3.5" />}Run Correlated Trace</Button>
+                  <Button size="sm" variant="outline" onClick={runBatchTrace} disabled={batchLoading}>{batchLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Flame className="mr-1.5 h-3.5 w-3.5" />}Batch Trace All APIs</Button>
+                  <Button size="sm" variant="outline" onClick={() => { loadTraceSummary(); loadFullTraceHistory(); }} disabled={traceSummaryLoading || fullHistoryLoading}><History className="mr-1.5 h-3.5 w-3.5" />Load History</Button>
+                </div>
+              </div>
+            </CardHeader></Card>
+
+            {correlatedError && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700"><AlertTriangle className="w-4 h-4 inline mr-2" />{correlatedError}</div>}
+
+            {/* ── PERFORMANCE OBSERVER: Live Observed Resources ── */}
+            <Card><CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2"><Eye className="w-4 h-4" />PerformanceObserver — Live Resource Capture <Badge variant="outline" className="text-[10px] ml-1">{tracerStats.totalObserved} observed</Badge></CardTitle>
+              <CardDescription>Automatically captures every fetch/XHR resource timing on this page via the PerformanceObserver API. No manual instrumentation needed.</CardDescription>
+            </CardHeader><CardContent>
+              {sortedObserved.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">No fetch resources observed yet. Interact with the app (click Trace, load data) and resources will appear here automatically.</p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto">
+                  <Table><TableHeader><TableRow className="bg-slate-50">
+                    <TableHead className="text-xs">Endpoint</TableHead>
+                    <TableHead className="text-xs text-right">Duration</TableHead>
+                    <TableHead className="text-xs text-right">Transfer</TableHead>
+                    <TableHead className="text-xs">Initiator</TableHead>
+                  </TableRow></TableHeader><TableBody>
+                    {sortedObserved.map((r, i) => (
+                      <TableRow key={`${r.name}-${i}`} className="hover:bg-slate-50/50">
+                        <TableCell className="font-mono text-[11px] max-w-[300px] truncate" title={r.name}>{r.name.replace(window.location.origin, '')}</TableCell>
+                        <TableCell className="text-right font-mono text-[11px] font-bold">{r.duration}<span className="text-slate-400 font-normal">ms</span></TableCell>
+                        <TableCell className="text-right text-[11px] font-mono text-slate-500">{r.transferSize > 0 ? `${(r.transferSize / 1024).toFixed(1)}KB` : 'cache'}</TableCell>
+                        <TableCell><Badge variant="outline" className="text-[10px]">{r.initiatorType}</Badge></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody></Table>
+                </div>
+              )}
+            </CardContent></Card>
+
+            {/* ── BATCH TRACE RESULTS ── */}
+            {batchResults.length > 0 && (
+              <Card><CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><Flame className="w-4 h-4" />Batch Trace — All Compliance Endpoints (Parallel)</CardTitle>
+                <CardDescription>Every API endpoint on the site traced simultaneously with browser-side timing. Shows which components are fast/slow from the browser's perspective.</CardDescription>
+              </CardHeader><CardContent className="space-y-3">
+                <div className="space-y-2">
+                  {batchResults.map((r, i) => {
+                    const maxMs = Math.max(...batchResults.map(b => b.roundTripMs), 1);
+                    const pct = (r.roundTripMs / maxMs) * 100;
+                    const isTotal = r.url.startsWith('TOTAL');
+                    return (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className={`text-[11px] font-mono w-[220px] flex-shrink-0 truncate ${isTotal ? 'font-bold text-slate-900' : 'text-slate-600'}`} title={r.url}>{r.url.replace(window.location.origin, '')}</span>
+                        <div className="flex-1 bg-slate-100 rounded-full h-4 relative overflow-hidden">
+                          <div className={`h-full rounded-full transition-all duration-500 ${isTotal ? 'bg-slate-800' : r.roundTripMs > 500 ? 'bg-red-400' : r.roundTripMs > 200 ? 'bg-amber-400' : 'bg-emerald-400'}`} style={{ width: `${pct}%` }} />
+                          <span className="absolute inset-0 flex items-center justify-center text-[10px] font-mono font-medium text-slate-700">{r.roundTripMs}ms</span>
+                        </div>
+                        {r.protocol && <Badge variant="outline" className="text-[9px] w-12 justify-center">{r.protocol}</Badge>}
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Legend */}
+                <div className="flex gap-4 text-[10px] text-slate-500">
+                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-emerald-400" /> &lt;200ms</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-amber-400" /> 200-500ms</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-red-400" /> &gt;500ms</span>
+                </div>
+              </CardContent></Card>
+            )}
+
+            {/* ── CORRELATED TRACE WATERFALL (the hero) ── */}
+            {correlatedResult && (
+              <Card><CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4" />Correlated Waterfall — Request {correlatedResult.requestId.slice(-10)} <Badge variant="outline" className="text-[10px] ml-1">Trace ID: ...{correlatedResult.traceId.slice(-8)}</Badge></CardTitle>
+                <CardDescription>Browser Resource Timing (DNS/TCP/SSL/request/response) + Middleware + Handler + DB — all timed and joined per request via shared request ID</CardDescription>
+              </CardHeader><CardContent className="space-y-4">
+
+                {/* Summary KPIs */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-center"><p className="text-[10px] text-sky-600 font-medium uppercase">Round-Trip</p><p className="text-xl font-bold text-sky-800 font-mono">{correlatedResult.client.roundTripMs}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center"><p className="text-[10px] text-amber-600 font-medium uppercase">Middleware</p><p className="text-xl font-bold text-amber-800 font-mono">{correlatedResult.server.middleware.durationMs}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-center"><p className="text-[10px] text-violet-600 font-medium uppercase">Handler</p><p className="text-xl font-bold text-violet-800 font-mono">{correlatedResult.server.handler.durationMs}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center"><p className="text-[10px] text-emerald-600 font-medium uppercase">DB Write</p><p className="text-xl font-bold text-emerald-800 font-mono">{correlatedResult.server.database.writeMs}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-center"><p className="text-[10px] text-rose-600 font-medium uppercase">Clock Delta</p><p className="text-xl font-bold text-rose-800 font-mono">{correlatedResult.correlation.clockDeltaMs}<span className="text-xs font-normal">ms</span></p></div>
+                </div>
+
+                {/* Waterfall chart */}
+                <div className="bg-white border border-slate-200 rounded-xl p-4">
+                  <p className="text-xs font-medium text-slate-500 mb-3">CORRELATED TIMELINE (browser phases + server phases, left = request start)</p>
+                  <WaterfallChart rows={correlatedWaterfall} totalMs={Math.max(correlatedResult.client.roundTripMs, 1)} />
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 text-[10px]">
+                  {[{c:'bg-sky-400',l:'Browser fetch'},{c:'bg-amber-400',l:'Middleware'},{c:'bg-violet-500',l:'Handler'},{c:'bg-emerald-500',l:'DB'},{c:'bg-pink-300',l:'DNS'},{c:'bg-indigo-300',l:'TCP'},{c:'bg-yellow-300',l:'TLS/SSL'},{c:'bg-orange-300',l:'Server Wait'},{c:'bg-cyan-300',l:'Download'},{c:'bg-orange-400',l:'JSON Parse'},{c:'bg-rose-400',l:'React Render'}].map(x => (
+                    <span key={x.l} className="flex items-center gap-1"><span className={`w-3 h-2 rounded-sm ${x.c}`} />{x.l}</span>
+                  ))}
+                </div>
+
+                {/* Browser Perspective vs Server Perspective */}
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {/* Browser Perspective */}
+                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" />Browser Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+                    <div className="flex justify-between"><span className="text-slate-500">fetch() called</span><span className="font-mono">{correlatedResult.client.fetchStart?.slice(11,23) ?? 'n/a'}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">TTFB</span><span className="font-mono font-bold text-sky-700">{correlatedResult.client.ttfbMs}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">JSON parse</span><span className="font-mono">{correlatedResult.client.jsonParseMs}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Round-trip</span><span className="font-mono font-bold">{correlatedResult.client.roundTripMs}ms</span></div>
+                    <Separator className="my-1" />
+                    <div className="flex justify-between"><span className="text-slate-500">Protocol</span><span className="font-mono">{correlatedResult.client.networkProtocol || 'n/a'}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Connection</span><span className="font-mono">{correlatedResult.client.connectionType}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Nav type</span><span className="font-mono">{correlatedResult.client.navigationType}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Observed res.</span><span className="font-mono">{correlatedResult.client.observedResources}</span></div>
+                    {correlatedResult.client.resourceTiming && (<>
+                      <Separator className="my-1" />
+                      <p className="text-[10px] text-slate-400 font-medium">Resource Timing API</p>
+                      <div className="flex justify-between"><span className="text-slate-500">DNS</span><span className="font-mono">{correlatedResult.client.resourceTiming.dnsMs}ms</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">TCP</span><span className="font-mono">{correlatedResult.client.resourceTiming.tcpMs}ms</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">SSL/TLS</span><span className="font-mono">{correlatedResult.client.resourceTiming.sslMs}ms</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">Request sent</span><span className="font-mono">{correlatedResult.client.resourceTiming.requestMs}ms</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">Response recv</span><span className="font-mono">{correlatedResult.client.resourceTiming.responseMs}ms</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">Transfer size</span><span className="font-mono">{correlatedResult.client.resourceTiming.transferSize}B</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">Encoded body</span><span className="font-mono">{correlatedResult.client.resourceTiming.encodedBodySize}B</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">Decoded body</span><span className="font-mono">{correlatedResult.client.resourceTiming.decodedBodySize}B</span></div>
+                    </>)}
+                  </CardContent></Card>
+
+                  {/* Server Perspective */}
+                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Server className="w-3.5 h-3.5" />Server Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+                    <div className="flex justify-between"><span className="text-slate-500">Middleware</span><span className="font-mono">{correlatedResult.server.middleware.startTs?.slice(11,23)} → {correlatedResult.server.middleware.endTs?.slice(11,23)} <span className="font-bold">({correlatedResult.server.middleware.durationMs}ms)</span></span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Handler</span><span className="font-mono">{correlatedResult.server.handler.durationMs}ms <span className="text-slate-400">(body parse: {correlatedResult.server.handler.bodyParseMs}ms)</span></span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">DB write</span><span className="font-mono text-emerald-700">{correlatedResult.server.database.writeMs}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Records written</span><span className="font-mono">{correlatedResult.server.database.recordsWritten}</span></div>
+                    <Separator className="my-1" />
+                    <div className="flex justify-between"><span className="text-slate-500">Server total</span><span className="font-mono font-bold">{correlatedResult.correlation.serverTotalMs}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Browser overhead</span><span className="font-mono">{correlatedResult.correlation.browserOverheadMs ?? 0}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Network transit</span><span className="font-mono">{correlatedResult.correlation.networkTransitMs ?? 0}ms</span></div>
+                    <Separator className="my-1" />
+                    <div className="flex justify-between"><span className="text-slate-500">Request ID</span><span className="font-mono text-[10px]">{correlatedResult.requestId.slice(-12)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Client IP</span><span className="font-mono text-[10px]">{correlatedResult.server.middleware.clientIp}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Trace persisted</span><span className="font-mono text-emerald-600">{correlatedResult.correlation.tracePersisted ? 'Yes' : 'No'}</span></div>
+                  </CardContent></Card>
+
+                  {/* Correlation Analysis */}
+                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Network className="w-3.5 h-3.5" />Correlation Analysis</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+                    <div className="flex justify-between"><span className="text-slate-500">Client round-trip</span><span className="font-mono font-bold text-sky-700">{correlatedResult.correlation.totalEndToEndMs}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Server processing</span><span className="font-mono font-bold">{correlatedResult.correlation.serverTotalMs}ms</span></div>
+                    <Separator className="my-1" />
+                    <div className="flex justify-between"><span className="text-slate-500">Browser overhead</span><span className="font-mono">{correlatedResult.correlation.browserOverheadMs ?? 0}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Network transit</span><span className="font-mono">{correlatedResult.correlation.networkTransitMs ?? 0}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Clock delta</span><span className="font-mono">{correlatedResult.correlation.clockDeltaMs}ms</span></div>
+                    <Separator className="my-1" />
+                    <p className="text-[10px] text-slate-400 font-medium">How it works:</p>
+                    <p className="text-[10px] text-slate-500">The browser captures fetch start, TTFB, JSON parse, and render times using <code className="bg-slate-100 px-0.5 rounded">performance.now()</code>. It also reads the Resource Timing API for DNS/TCP/SSL breakdown. The server reads middleware-injected headers and times its own handler + DB work. Both are joined by the shared <code className="bg-slate-100 px-0.5 rounded">x-request-id</code> and persisted as a single <code className="bg-slate-100 px-0.5 rounded">CorrelatedTrace</code> row in SQLite.</p>
+                    <Separator className="my-1" />
+                    <p className="text-[10px] text-slate-400 font-medium">Component coverage:</p>
+                    <ul className="text-[10px] text-slate-500 space-y-0.5">
+                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />Browser (Performance API)</li>
+                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />Next.js Middleware</li>
+                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />API Route Handler</li>
+                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />SQLite Database (Prisma)</li>
+                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />Component Health Tracker</li>
+                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />PerformanceObserver (auto)</li>
+                    </ul>
+                  </CardContent></Card>
+                </div>
+
+                {/* Raw timing JSON */}
+                <details className="text-xs"><summary className="text-slate-500 cursor-pointer hover:text-slate-700">Raw Browser Timing JSON (from Performance API)</summary>
+                  <pre className="mt-2 bg-slate-900 text-emerald-400 rounded-lg p-3 text-[10px] font-mono max-h-48 overflow-y-auto">{(() => { try { return JSON.stringify(JSON.parse(correlatedResult.clientTimingJson ?? '{}'), null, 2); } catch { return correlatedResult.clientTimingJson ?? '{}'; } })()}</pre>
+                </details>
+              </CardContent></Card>
+            )}
+
+            {/* ── TRACE SUMMARY (aggregated) ── */}
+            {traceSummary && (
+              <Card><CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><FileClock className="w-4 h-4" />Aggregated Trace Statistics <Badge variant="outline" className="text-[10px] ml-1">{traceSummary.total as number} total traces</Badge></CardTitle>
+              </CardHeader><CardContent className="space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg TTFB</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.clientTtfbMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Round-Trip</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.clientRoundTripMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Handler</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.serverHandlerMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg DB Write</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.serverDbWriteMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+                </div>
+                {/* Per-path breakdown */}
+                {traceSummary.byPath && Array.isArray(traceSummary.byPath) && (traceSummary.byPath as Array<Record<string, unknown>>).length > 0 && (
+                  <div className="max-h-40 overflow-y-auto">
+                    <Table><TableHeader><TableRow className="bg-slate-50">
+                      <TableHead className="text-xs">Endpoint</TableHead>
+                      <TableHead className="text-xs">Method</TableHead>
+                      <TableHead className="text-xs text-right">Count</TableHead>
+                      <TableHead className="text-xs text-right">Avg Client RT</TableHead>
+                      <TableHead className="text-xs text-right">Avg Handler</TableHead>
+                    </TableRow></TableHeader><TableBody>
+                      {(traceSummary.byPath as Array<Record<string, unknown>>).map((p, i) => (
+                        <TableRow key={i} className="hover:bg-slate-50/50">
+                          <TableCell className="font-mono text-[11px]">{p.path as string}</TableCell>
+                          <TableCell><Badge variant="outline" className="text-[10px]">{p.method as string}</Badge></TableCell>
+                          <TableCell className="text-[11px] font-mono text-right">{(p._count as Record<string, number>)?.id ?? 0}</TableCell>
+                          <TableCell className="text-[11px] font-mono text-right">{Math.round((p._avg as Record<string, number>)?.clientRoundTripMs ?? 0)}ms</TableCell>
+                          <TableCell className="text-[11px] font-mono text-right">{Math.round((p._avg as Record<string, number>)?.serverHandlerMs ?? 0)}ms</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody></Table>
+                  </div>
+                )}
+              </CardContent></Card>
+            )}
+
+            {/* ── FULL TRACE HISTORY ── */}
+            {fullTraceHistory.length > 0 && (
+              <Card><CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><History className="w-4 h-4" />Correlated Trace History ({fullTraceHistory.length})</CardTitle>
+                <CardDescription>All persisted client+server traces from the dedicated correlated-trace endpoint, sorted newest first</CardDescription>
+              </CardHeader><CardContent className="space-y-4">
+                <div className="max-h-96 overflow-y-auto space-y-3">
+                  {fullTraceHistory.map(t => (
+                    <div key={t.id} className="border border-slate-200 rounded-lg p-3 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Badge variant="outline" className="font-mono text-[10px] text-emerald-700 border-emerald-300">{t.method}</Badge>
+                        <span className="font-mono text-slate-600">...{t.requestId.slice(-10)}</span>
+                        <Badge variant="outline" className="text-[10px]">{t.statusCode}</Badge>
+                        <span className="text-slate-400">{t.createdAt.slice(11, 19)}</span>
+                        <span className="ml-auto font-mono font-bold text-slate-700">{t.totalEndToEndMs}ms E2E</span>
+                        {t.clientNetworkProtocol && <Badge variant="outline" className="text-[9px]">{t.clientNetworkProtocol}</Badge>}
+                      </div>
+                      <WaterfallChart rows={buildHistoryWaterfall(t)} totalMs={Math.max(t.totalEndToEndMs, 1)} />
+                      <div className="flex flex-wrap gap-3 text-[9px] text-slate-500">
+                        <span>TTFB: <b>{t.clientTtfbMs}ms</b></span>
+                        <span>Middleware: <b>{t.serverMiddlewareMs}ms</b></span>
+                        <span>Handler: <b>{t.serverHandlerMs}ms</b></span>
+                        <span>DB W: <b>{t.serverDbWriteMs}ms</b></span>
+                        <span>JSON Parse: <b>{t.clientJsonParseMs}ms</b></span>
+                        <span>Clock Delta: <b>{t.clientServerDeltaMs}ms</b></span>
+                        <span>Round-Trip: <b className="text-sky-700">{t.clientRoundTripMs}ms</b></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent></Card>
+            )}
+
+            {/* ── EMPTY STATE ── */}
+            {!correlatedResult && batchResults.length === 0 && !traceSummary && fullTraceHistory.length === 0 && (
+              <Card className="border-dashed"><CardContent className="py-12 text-center">
+                <MousePointerClick className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm font-medium text-slate-600">No frontend traces yet</p>
+                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">Click "Run Correlated Trace" to capture a full browser-side timing profile and correlate it with server-side middleware, handler, and database traces. Use "Batch Trace All APIs" to profile every endpoint on the site at once.</p>
+              </CardContent></Card>
+            )}
+          </TabsContent>
+
           {/* ══════════ FINDINGS TAB ══════════ */}
           <TabsContent value="findings"><Card><CardHeader className="pb-3"><div className="flex items-center justify-between"><div><CardTitle className="text-base">Audit Findings</CardTitle><CardDescription>{findings.length} findings from 11 compliance queries</CardDescription></div><div className="flex gap-2"><Badge variant="outline" className="text-xs">Critical: {findings.filter(f => f.severity === 'critical').length}</Badge><Badge variant="outline" className="text-xs">High: {findings.filter(f => f.severity === 'high').length}</Badge></div></div></CardHeader><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow className="bg-slate-50"><TableHead className="w-[180px]">Ref</TableHead><TableHead className="w-[80px]">Severity</TableHead><TableHead className="w-[100px]">Status</TableHead><TableHead className="w-[100px]">Risk</TableHead><TableHead>Title</TableHead><TableHead className="w-[60px] text-right">Rows</TableHead><TableHead className="w-[80px] text-right">MTTR</TableHead></TableRow></TableHeader><TableBody>{findings.map(f => (
                   <TableRow key={f.finding_ref} className="hover:bg-slate-50/50">
@@ -703,6 +1088,10 @@ export default function ComplianceDashboard() {
           {/* ══════════ API ENDPOINTS TAB ══════════ */}
           <TabsContent value="endpoints"><Card><CardHeader className="pb-3"><CardTitle className="text-base">API Endpoints</CardTitle><CardDescription>All compliance swarm endpoints available to the frontend</CardDescription></CardHeader><CardContent className="space-y-2">
             {[
+              { method: 'GET', path: '/api/system/correlated-trace', desc: '[FRONTEND TRACE] API info and availability check', live: true },
+              { method: 'POST', path: '/api/system/correlated-trace', desc: '[FRONTEND TRACE] Ingest browser Resource Timing + correlate with server, persist', live: true },
+              { method: 'GET', path: '/api/system/correlated-trace?mode=history', desc: '[FRONTEND TRACE] Retrieve stored correlated traces', live: true },
+              { method: 'GET', path: '/api/system/correlated-trace?mode=summary', desc: '[FRONTEND TRACE] Aggregated stats (avg TTFB, per-path breakdown)', live: true },
               { method: 'GET', path: '/api/system/ping', desc: '[CORRELATED] Full client+server trace with Performance API timing', live: true },
               { method: 'GET', path: '/api/system/ping?trace=history', desc: '[CORRELATED] Load stored trace history from DB', live: true },
               { method: 'POST', path: '/api/system/ping', desc: '[CORRELATED] Write event + browser timing to DB', live: true },
@@ -717,7 +1106,7 @@ export default function ComplianceDashboard() {
               <div key={ep.path + ep.method} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50">
                 <Badge variant="outline" className={`font-mono text-xs w-14 justify-center ${ep.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-blue-700 border-blue-300'}`}>{ep.method}</Badge>
                 <code className={`text-sm font-mono flex-1 ${ep.live ? 'text-slate-900 font-semibold' : 'text-slate-800'}`}>{ep.path}</code>
-                {ep.live && <Badge className="text-[9px] bg-emerald-100 text-emerald-700 border-emerald-200">CORRELATED</Badge>}
+                {ep.live && <Badge className="text-[9px] bg-emerald-100 text-emerald-700 border-emerald-200">{ep.desc.includes('FRONTEND TRACE') ? 'FRONTEND TRACE' : 'CORRELATED'}</Badge>}
                 <span className="text-xs text-slate-500 max-w-[250px] truncate hidden sm:inline">{ep.desc}</span>
               </div>
             ))}
