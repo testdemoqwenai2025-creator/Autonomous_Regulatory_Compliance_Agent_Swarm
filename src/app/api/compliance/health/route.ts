@@ -1,10 +1,12 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { startTiming, applyTimingHeaders } from '@/lib/timing-headers';
 
-export async function GET() {
-  return NextResponse.json({
+export async function GET(request: NextRequest) {
+  const t = startTiming(request);
+  return applyTimingHeaders(NextResponse.json({
     status: 'healthy',
     service: 'maritime-compliance-swarm',
-    version: '1.0.0',
+    version: '2.1.0',
     tools: [
       { name: 'Manifest_PII_Anonymiser', language: 'Python', status: 'available' },
       { name: 'Logistics_EDI_SQL_Auditor', language: 'Python', status: 'available' },
@@ -19,6 +21,7 @@ export async function GET() {
       anonymise: '/api/compliance/anonymise',
       audit: '/api/compliance/audit',
       remediate: '/api/compliance/remediate',
+      observability: '/api/system/observability/ep-trace',
     },
-  });
+  }), t);
 }

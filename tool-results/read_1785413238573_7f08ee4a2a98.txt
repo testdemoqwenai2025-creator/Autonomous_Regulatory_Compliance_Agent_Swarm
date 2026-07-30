@@ -1,0 +1,522 @@
+     1→   600→        )}
+     2→   601→
+     3→   602→        {/* Tool Status Bar */}
+     4→   603→        <Card><CardContent className="p-4">
+     5→   604→          <div className="flex flex-wrap items-center gap-4">
+     6→   605→            <div className="flex items-center gap-2 text-sm"><Server className="w-4 h-4 text-slate-400" /><span className="font-medium text-slate-700">Swarm Tools:</span></div>
+     7→   606→            {[{ name: 'PII Anonymiser', icon: FileKey, lang: 'Python' },{ name: 'EDI Auditor', icon: FileSearch, lang: 'Python' },{ name: 'Remediation', icon: Wrench, lang: 'Python' },{ name: 'MTTR Tracker', icon: Timer, lang: 'Go' }].map(tool => (
+     8→   607→              <Badge key={tool.name} variant="outline" className="gap-1.5 font-mono text-xs"><tool.icon className="w-3 h-3" />{tool.name}<span className="text-slate-400">({tool.lang})</span></Badge>
+     9→   608→            ))}
+    10→   609→          </div>
+    11→   610→        </CardContent></Card>
+    12→   611→
+    13→   612→        {/* Tabs */}
+    14→   613→        <Tabs defaultValue="pipeline" className="space-y-4">
+    15→   614→          <TabsList className="grid w-full grid-cols-7">
+    16→   615→            <TabsTrigger value="pipeline" className="text-xs sm:text-sm">Pipeline</TabsTrigger>
+    17→   616→            <TabsTrigger value="frontend-trace" className="text-xs sm:text-sm flex items-center gap-1"><MousePointerClick className="w-3 h-3" />Frontend Trace</TabsTrigger>
+    18→   617→            <TabsTrigger value="findings" className="text-xs sm:text-sm">Findings</TabsTrigger>
+    19→   618→            <TabsTrigger value="mttr" className="text-xs sm:text-sm">MTTR</TabsTrigger>
+    20→   619→            <TabsTrigger value="profiles" className="text-xs sm:text-sm">EDI Profiles</TabsTrigger>
+    21→   620→            <TabsTrigger value="policies" className="text-xs sm:text-sm">Policies</TabsTrigger>
+    22→   621→            <TabsTrigger value="endpoints" className="text-xs sm:text-sm">API</TabsTrigger>
+    23→   622→          </TabsList>
+    24→   623→
+    25→   624→          {/* ══════════ PIPELINE TAB ══════════ */}
+    26→   625→          <TabsContent value="pipeline" className="space-y-4">
+    27→   626→
+    28→   627→            {/* ── Action Bar ── */}
+    29→   628→            <Card><CardHeader className="pb-3">
+    30→   629→              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    31→   630→                <div>
+    32→   631→                  <CardTitle className="text-base flex items-center gap-2"><CircuitBoard className="w-4 h-4" />Correlated Endpoint Trace</CardTitle>
+    33→   632→                  <CardDescription>Browser Performance API + Middleware + API Handler + Database — all timed and joined per request</CardDescription>
+    34→   633→                </div>
+    35→   634→                <div className="flex gap-2 flex-wrap">
+    36→   635→                  <Button size="sm" onClick={runPing} disabled={pingLoading}>{pingLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1.5 h-3.5 w-3.5" />}Trace GET</Button>
+    37→   636→                  <Button size="sm" variant="outline" onClick={loadTraceHistory} disabled={loadingHistory}><History className="mr-1.5 h-3.5 w-3.5" />Load History</Button>
+    38→   637→                </div>
+    39→   638→              </div>
+    40→   639→            </CardHeader></Card>
+    41→   640→
+    42→   641→            {pingError && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700"><AlertTriangle className="w-4 h-4 inline mr-2" />{pingError}</div>}
+    43→   642→
+    44→   643→            {/* ── CORRELATED WATERFALL (the hero) ── */}
+    45→   644→            {pingData && (
+    46→   645→              <Card><CardHeader className="pb-2">
+    47→   646→                <CardTitle className="text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4" />Correlated Waterfall — Request {pingData.server.middleware.requestId.slice(-10)}</CardTitle>
+    48→   647→                <CardDescription>Client-side timing (Performance API) correlated with server-side middleware/handler/DB traces</CardDescription>
+    49→   648→              </CardHeader><CardContent className="space-y-4">
+    50→   649→
+    51→   650→                {/* Summary KPIs */}
+    52→   651→                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    53→   652→                  <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-center"><p className="text-[10px] text-sky-600 font-medium uppercase">Browser Round-Trip</p><p className="text-xl font-bold text-sky-800 font-mono">{pingTotalMs}<span className="text-xs font-normal">ms</span></p></div>
+    54→   653→                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center"><p className="text-[10px] text-amber-600 font-medium uppercase">Middleware</p><p className="text-xl font-bold text-amber-800 font-mono">{pingData.server.middleware.durationMs}<span className="text-xs font-normal">ms</span></p></div>
+    55→   654→                  <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-center"><p className="text-[10px] text-violet-600 font-medium uppercase">Handler + DB</p><p className="text-xl font-bold text-violet-800 font-mono">{pingData.server.handler.durationMs}<span className="text-xs font-normal">ms</span></p></div>
+    56→   655→                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center"><p className="text-[10px] text-emerald-600 font-medium uppercase">Clock Delta</p><p className="text-xl font-bold text-emerald-800 font-mono">{pingData.correlation.clockDeltaMs}<span className="text-xs font-normal">ms</span></p></div>
+    57→   656→                </div>
+    58→   657→
+    59→   658→                {/* Waterfall chart */}
+    60→   659→                <div className="bg-white border border-slate-200 rounded-xl p-4">
+    61→   660→                  <p className="text-xs font-medium text-slate-500 mb-3">TIMELINE (left = request start, right = response received by browser)</p>
+    62→   661→                  <WaterfallChart rows={pingWaterfall} totalMs={Math.max(pingTotalMs, 1)} />
+    63→   662→                </div>
+    64→   663→
+    65→   664→                {/* Legend */}
+    66→   665→                <div className="flex flex-wrap gap-3 text-[10px]">
+    67→   666→                  {[{c:'bg-sky-400',l:'Browser'},{c:'bg-amber-400',l:'Middleware'},{c:'bg-violet-500',l:'API Handler'},{c:'bg-emerald-500',l:'DB Write'},{c:'bg-teal-500',l:'DB Read'},{c:'bg-orange-400',l:'JSON Parse'},{c:'bg-rose-400',l:'React Render'}].map(x => (
+    68→   667→                    <span key={x.l} className="flex items-center gap-1"><span className={`w-3 h-2 rounded-sm ${x.c}`} />{x.l}</span>
+    69→   668→                  ))}
+    70→   669→                </div>
+    71→   670→
+    72→   671→                {/* Correlation detail */}
+    73→   672→                <div className="grid gap-3 sm:grid-cols-2">
+    74→   673→                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" />Browser Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+    75→   674→                    <div className="flex justify-between"><span className="text-slate-500">fetch() called</span><span className="font-mono">{(pingData.client.fetchStart as string)?.slice(11,23) ?? 'n/a'}</span></div>
+    76→   675→                    <div className="flex justify-between"><span className="text-slate-500">TTFB (first byte)</span><span className="font-mono font-bold">{pingData.client.ttfbMs ?? 0}ms</span></div>
+    77→   676→                    <div className="flex justify-between"><span className="text-slate-500">JSON parse</span><span className="font-mono">{pingData.client.jsonParseMs ?? 0}ms</span></div>
+    78→   677→                    <div className="flex justify-between"><span className="text-slate-500">Total round-trip</span><span className="font-mono font-bold text-sky-700">{pingTotalMs}ms</span></div>
+    79→   678→                    <div className="flex justify-between"><span className="text-slate-500">Navigation type</span><span className="font-mono">{pingData.client.navigationType ?? 'n/a'}</span></div>
+    80→   679→                    <div className="flex justify-between"><span className="text-slate-500">Connection</span><span className="font-mono">{pingData.client.connectionType ?? 'n/a'}</span></div>
+    81→   680→                  </CardContent></Card>
+    82→   681→
+    83→   682→                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Server className="w-3.5 h-3.5" />Server Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+    84→   683→                    <div className="flex justify-between"><span className="text-slate-500">Middleware</span><span className="font-mono">{pingData.server.middleware.startTs?.slice(11,23)} → {pingData.server.middleware.endTs?.slice(11,23)} <span className="font-bold">({pingData.server.middleware.durationMs}ms)</span></span></div>
+    85→   684→                    <div className="flex justify-between"><span className="text-slate-500">Handler</span><span className="font-mono">{pingData.server.handler.durationMs}ms</span></div>
+    86→   685→                    <div className="flex justify-between"><span className="text-slate-500">DB write</span><span className="font-mono text-emerald-700">{pingData.server.database.writeMs}ms</span></div>
+    87→   686→                    <div className="flex justify-between"><span className="text-slate-500">DB read</span><span className="font-mono text-emerald-700">{pingData.server.database.readMs}ms</span></div>
+    88→   687→                    <Separator className="my-1" />
+    89→   688→                    <div className="flex justify-between"><span className="text-slate-500">Server total</span><span className="font-mono font-bold">{pingData.correlation.serverTotalMs}ms</span></div>
+    90→   689→                    <div className="flex justify-between"><span className="text-slate-500">Browser overhead</span><span className="font-mono">{pingData.correlation.browserOverheadMs ?? 0}ms</span></div>
+    91→   690→                    <div className="flex justify-between"><span className="text-slate-500">Network transit</span><span className="font-mono">{pingData.correlation.networkTransitMs ?? 0}ms</span></div>
+    92→   691→                  </CardContent></Card>
+    93→   692→                </div>
+    94→   693→
+    95→   694→                {/* Response headers proof */}
+    96→   695→                <details className="text-xs"><summary className="text-slate-500 cursor-pointer hover:text-slate-700">Response Headers (middleware proof)</summary>
+    97→   696→                  <div className="mt-2 bg-slate-900 text-emerald-400 rounded-lg p-3 font-mono text-[10px] max-h-32 overflow-y-auto">
+    98→   697→                    {Object.entries(responseHeaders).filter(([k]) => k.startsWith('x-')).map(([k, v]) => (
+    99→   698→                      <div key={k}><span className="text-slate-500">{k}:</span> {String(v).slice(0, 60)}</div>
+   100→   699→                    ))}
+   101→   700→                  </div>
+   102→   701→                </details>
+   103→   702→
+   104→   703→                {/* POST test */}
+   105→   704→                <Separator />
+   106→   705→                <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+   107→   706→                  <p className="text-xs font-medium text-slate-600 flex-shrink-0">POST with timing:</p>
+   108→   707→                  <Input placeholder='{{"message": "hello"}}' value={postPayload} onChange={e => setPostPayload(e.target.value)} className="font-mono text-xs max-w-sm" />
+   109→   708→                  <Button size="sm" variant="outline" onClick={runPostPing} disabled={pingLoading}><Send className="mr-1.5 h-3.5 w-3.5" />POST</Button>
+   110→   709→                </div>
+   111→   710→                {postResult && (
+   112→   711→                  <details><summary className="text-xs text-slate-500 cursor-pointer">POST Response (with timing)</summary>
+   113→   712→                    <pre className="mt-1 bg-slate-900 text-emerald-400 rounded-lg p-3 text-[10px] font-mono max-h-40 overflow-y-auto">{postResult}</pre>
+   114→   713→                  </details>
+   115→   714→                )}
+   116→   715→              </CardContent></Card>
+   117→   716→            )}
+   118→   717→
+   119→   718→            {/* ── TRACE HISTORY ── */}
+   120→   719→            {traceHistory.length > 0 && (
+   121→   720→              <Card><CardHeader className="pb-2">
+   122→   721→                <CardTitle className="text-sm flex items-center gap-2"><History className="w-4 h-4" />Stored Correlated Traces ({traceHistory.length})</CardTitle>
+   123→   722→                <CardDescription>Persisted in SQLite — client + server timings joined per requestId. Proof of full-stack observability.</CardDescription>
+   124→   723→              </CardHeader><CardContent className="space-y-4">
+   125→   724→                <div className="max-h-96 overflow-y-auto space-y-3">
+   126→   725→                  {traceHistory.map(t => (
+   127→   726→                    <div key={t.id} className="border border-slate-200 rounded-lg p-3 space-y-2">
+   128→   727→                      <div className="flex flex-wrap items-center gap-2 text-xs">
+   129→   728→                        <Badge variant="outline" className={`font-mono text-[10px] ${t.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-amber-700 border-amber-300'}`}>{t.method}</Badge>
+   130→   729→                        <span className="font-mono text-slate-600">...{t.requestId.slice(-10)}</span>
+   131→   730→                        <Badge variant="outline" className="text-[10px]">{t.statusCode}</Badge>
+   132→   731→                        <span className="text-slate-400">{t.createdAt.slice(11, 19)}</span>
+   133→   732→                        <span className="ml-auto font-mono font-bold text-slate-700">{t.totalEndToEndMs}ms E2E</span>
+   134→   733→                      </div>
+   135→   734→                      <WaterfallChart rows={buildHistoryWaterfall(t)} totalMs={Math.max(t.totalEndToEndMs, 1)} />
+   136→   735→                      <div className="flex flex-wrap gap-3 text-[9px] text-slate-500">
+   137→   736→                        <span>Browser TTFB: <b>{t.clientTtfbMs}ms</b></span>
+   138→   737→                        <span>Middleware: <b>{t.serverMiddlewareMs}ms</b></span>
+   139→   738→                        <span>Handler: <b>{t.serverHandlerMs}ms</b></span>
+   140→   739→                        <span>DB W: <b>{t.serverDbWriteMs}ms</b></span>
+   141→   740→                        <span>DB R: <b>{t.serverDbReadMs}ms</b></span>
+   142→   741→                        <span>JSON Parse: <b>{t.clientJsonParseMs}ms</b></span>
+   143→   742→                        <span>Clock Delta: <b>{t.clientServerDeltaMs}ms</b></span>
+   144→   743→                      </div>
+   145→   744→                    </div>
+   146→   745→                  ))}
+   147→   746→                </div>
+   148→   747→              </CardContent></Card>
+   149→   748→            )}
+   150→   749→
+   151→   750→            {/* ── Recent DB Events ── */}
+   152→   751→            {pingData && (
+   153→   752→              <Card><CardHeader className="pb-2">
+   154→   753→                <CardTitle className="text-sm flex items-center gap-2"><Activity className="w-4 h-4" />Recent DB Events</CardTitle>
+   155→   754→              </CardHeader><CardContent>
+   156→   755→                <div className="max-h-48 overflow-y-auto">
+   157→   756→                  <Table><TableHeader><TableRow className="bg-slate-50">
+   158→   757→                    <TableHead className="text-xs">Event ID</TableHead><TableHead className="text-xs">Path</TableHead><TableHead className="text-xs">Method</TableHead><TableHead className="text-xs">Status</TableHead><TableHead className="text-xs">DB Read</TableHead><TableHead className="text-xs">Created</TableHead>
+   159→   758→                  </TableRow></TableHeader><TableBody>
+   160→   759→                    {pingData.stats.recentEvents.map(ev => (
+   161→   760→                      <TableRow key={ev.id} className="hover:bg-slate-50/50">
+   162→   761→                        <TableCell className="font-mono text-[11px]">...{ev.id}</TableCell>
+   163→   762→                        <TableCell className="font-mono text-[11px]">{ev.path}</TableCell>
+   164→   763→                        <TableCell><Badge variant="outline" className={`text-[10px] ${ev.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-amber-700 border-amber-300'}`}>{ev.method}</Badge></TableCell>
+   165→   764→                        <TableCell className="text-[11px]">{ev.statusCode}</TableCell>
+   166→   765→                        <TableCell className="font-mono text-[11px]">{ev.dbReadMs != null ? `${ev.dbReadMs}ms` : '-'}</TableCell>
+   167→   766→                        <TableCell className="text-[11px] text-slate-500">{ev.createdAt.slice(11, 19)}</TableCell>
+   168→   767→                      </TableRow>
+   169→   768→                    ))}
+   170→   769→                  </TableBody></Table>
+   171→   770→                </div>
+   172→   771→              </CardContent></Card>
+   173→   772→            )}
+   174→   773→          </TabsContent>
+   175→   774→
+   176→   775→          {/* ══════════ FRONTEND TRACE TAB ══════════ */}
+   177→   776→          <TabsContent value="frontend-trace" className="space-y-4">
+   178→   777→
+   179→   778→            {/* ── Section Header ── */}
+   180→   779→            <Card><CardHeader className="pb-3">
+   181→   780→              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+   182→   781→                <div>
+   183→   782→                  <CardTitle className="text-base flex items-center gap-2"><MousePointerClick className="w-4 h-4" />Frontend Browser-Side Trace</CardTitle>
+   184→   783→                  <CardDescription>Captures browser Performance API timings (Resource Timing, Navigation Timing) and correlates with server-side middleware/handler/DB traces across ALL site components</CardDescription>
+   185→   784→                </div>
+   186→   785→                <div className="flex gap-2 flex-wrap">
+   187→   786→                  <Button size="sm" onClick={runCorrelatedTrace} disabled={correlatedLoading}>{correlatedLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Radio className="mr-1.5 h-3.5 w-3.5" />}Run Correlated Trace</Button>
+   188→   787→                  <Button size="sm" variant="outline" onClick={runBatchTrace} disabled={batchLoading}>{batchLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Flame className="mr-1.5 h-3.5 w-3.5" />}Batch Trace All APIs</Button>
+   189→   788→                  <Button size="sm" variant="outline" onClick={() => { loadTraceSummary(); loadFullTraceHistory(); }} disabled={traceSummaryLoading || fullHistoryLoading}><History className="mr-1.5 h-3.5 w-3.5" />Load History</Button>
+   190→   789→                </div>
+   191→   790→              </div>
+   192→   791→            </CardHeader></Card>
+   193→   792→
+   194→   793→            {correlatedError && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700"><AlertTriangle className="w-4 h-4 inline mr-2" />{correlatedError}</div>}
+   195→   794→
+   196→   795→            {/* ── PERFORMANCE OBSERVER: Live Observed Resources ── */}
+   197→   796→            <Card><CardHeader className="pb-2">
+   198→   797→              <CardTitle className="text-sm flex items-center gap-2"><Eye className="w-4 h-4" />PerformanceObserver — Live Resource Capture <Badge variant="outline" className="text-[10px] ml-1">{tracerStats.totalObserved} observed</Badge></CardTitle>
+   199→   798→              <CardDescription>Automatically captures every fetch/XHR resource timing on this page via the PerformanceObserver API. No manual instrumentation needed.</CardDescription>
+   200→   799→            </CardHeader><CardContent>
+   201→   800→              {sortedObserved.length === 0 ? (
+   202→   801→                <p className="text-xs text-slate-400 italic">No fetch resources observed yet. Interact with the app (click Trace, load data) and resources will appear here automatically.</p>
+   203→   802→              ) : (
+   204→   803→                <div className="max-h-48 overflow-y-auto">
+   205→   804→                  <Table><TableHeader><TableRow className="bg-slate-50">
+   206→   805→                    <TableHead className="text-xs">Endpoint</TableHead>
+   207→   806→                    <TableHead className="text-xs text-right">Duration</TableHead>
+   208→   807→                    <TableHead className="text-xs text-right">Transfer</TableHead>
+   209→   808→                    <TableHead className="text-xs">Initiator</TableHead>
+   210→   809→                  </TableRow></TableHeader><TableBody>
+   211→   810→                    {sortedObserved.map((r, i) => (
+   212→   811→                      <TableRow key={`${r.name}-${i}`} className="hover:bg-slate-50/50">
+   213→   812→                        <TableCell className="font-mono text-[11px] max-w-[300px] truncate" title={r.name}>{r.name.replace(window.location.origin, '')}</TableCell>
+   214→   813→                        <TableCell className="text-right font-mono text-[11px] font-bold">{r.duration}<span className="text-slate-400 font-normal">ms</span></TableCell>
+   215→   814→                        <TableCell className="text-right text-[11px] font-mono text-slate-500">{r.transferSize > 0 ? `${(r.transferSize / 1024).toFixed(1)}KB` : 'cache'}</TableCell>
+   216→   815→                        <TableCell><Badge variant="outline" className="text-[10px]">{r.initiatorType}</Badge></TableCell>
+   217→   816→                      </TableRow>
+   218→   817→                    ))}
+   219→   818→                  </TableBody></Table>
+   220→   819→                </div>
+   221→   820→              )}
+   222→   821→            </CardContent></Card>
+   223→   822→
+   224→   823→            {/* ── BATCH TRACE RESULTS ── */}
+   225→   824→            {batchResults.length > 0 && (
+   226→   825→              <Card><CardHeader className="pb-2">
+   227→   826→                <CardTitle className="text-sm flex items-center gap-2"><Flame className="w-4 h-4" />Batch Trace — All Compliance Endpoints (Parallel)</CardTitle>
+   228→   827→                <CardDescription>Every API endpoint on the site traced simultaneously with browser-side timing. Shows which components are fast/slow from the browser's perspective.</CardDescription>
+   229→   828→              </CardHeader><CardContent className="space-y-3">
+   230→   829→                <div className="space-y-2">
+   231→   830→                  {batchResults.map((r, i) => {
+   232→   831→                    const maxMs = Math.max(...batchResults.map(b => b.roundTripMs), 1);
+   233→   832→                    const pct = (r.roundTripMs / maxMs) * 100;
+   234→   833→                    const isTotal = r.url.startsWith('TOTAL');
+   235→   834→                    return (
+   236→   835→                      <div key={i} className="flex items-center gap-3">
+   237→   836→                        <span className={`text-[11px] font-mono w-[220px] flex-shrink-0 truncate ${isTotal ? 'font-bold text-slate-900' : 'text-slate-600'}`} title={r.url}>{r.url.replace(window.location.origin, '')}</span>
+   238→   837→                        <div className="flex-1 bg-slate-100 rounded-full h-4 relative overflow-hidden">
+   239→   838→                          <div className={`h-full rounded-full transition-all duration-500 ${isTotal ? 'bg-slate-800' : r.roundTripMs > 500 ? 'bg-red-400' : r.roundTripMs > 200 ? 'bg-amber-400' : 'bg-emerald-400'}`} style={{ width: `${pct}%` }} />
+   240→   839→                          <span className="absolute inset-0 flex items-center justify-center text-[10px] font-mono font-medium text-slate-700">{r.roundTripMs}ms</span>
+   241→   840→                        </div>
+   242→   841→                        {r.protocol && <Badge variant="outline" className="text-[9px] w-12 justify-center">{r.protocol}</Badge>}
+   243→   842→                      </div>
+   244→   843→                    );
+   245→   844→                  })}
+   246→   845→                </div>
+   247→   846→                {/* Legend */}
+   248→   847→                <div className="flex gap-4 text-[10px] text-slate-500">
+   249→   848→                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-emerald-400" /> &lt;200ms</span>
+   250→   849→                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-amber-400" /> 200-500ms</span>
+   251→   850→                  <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-red-400" /> &gt;500ms</span>
+   252→   851→                </div>
+   253→   852→              </CardContent></Card>
+   254→   853→            )}
+   255→   854→
+   256→   855→            {/* ── CORRELATED TRACE WATERFALL (the hero) ── */}
+   257→   856→            {correlatedResult && (
+   258→   857→              <Card><CardHeader className="pb-2">
+   259→   858→                <CardTitle className="text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4" />Correlated Waterfall — Request {correlatedResult.requestId.slice(-10)} <Badge variant="outline" className="text-[10px] ml-1">Trace ID: ...{correlatedResult.traceId.slice(-8)}</Badge></CardTitle>
+   260→   859→                <CardDescription>Browser Resource Timing (DNS/TCP/SSL/request/response) + Middleware + Handler + DB — all timed and joined per request via shared request ID</CardDescription>
+   261→   860→              </CardHeader><CardContent className="space-y-4">
+   262→   861→
+   263→   862→                {/* Summary KPIs */}
+   264→   863→                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+   265→   864→                  <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-center"><p className="text-[10px] text-sky-600 font-medium uppercase">Round-Trip</p><p className="text-xl font-bold text-sky-800 font-mono">{correlatedResult.client.roundTripMs}<span className="text-xs font-normal">ms</span></p></div>
+   266→   865→                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center"><p className="text-[10px] text-amber-600 font-medium uppercase">Middleware</p><p className="text-xl font-bold text-amber-800 font-mono">{correlatedResult.server.middleware.durationMs}<span className="text-xs font-normal">ms</span></p></div>
+   267→   866→                  <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-center"><p className="text-[10px] text-violet-600 font-medium uppercase">Handler</p><p className="text-xl font-bold text-violet-800 font-mono">{correlatedResult.server.handler.durationMs}<span className="text-xs font-normal">ms</span></p></div>
+   268→   867→                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center"><p className="text-[10px] text-emerald-600 font-medium uppercase">DB Write</p><p className="text-xl font-bold text-emerald-800 font-mono">{correlatedResult.server.database.writeMs}<span className="text-xs font-normal">ms</span></p></div>
+   269→   868→                  <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-center"><p className="text-[10px] text-rose-600 font-medium uppercase">Clock Delta</p><p className="text-xl font-bold text-rose-800 font-mono">{correlatedResult.correlation.clockDeltaMs}<span className="text-xs font-normal">ms</span></p></div>
+   270→   869→                </div>
+   271→   870→
+   272→   871→                {/* Waterfall chart */}
+   273→   872→                <div className="bg-white border border-slate-200 rounded-xl p-4">
+   274→   873→                  <p className="text-xs font-medium text-slate-500 mb-3">CORRELATED TIMELINE (browser phases + server phases, left = request start)</p>
+   275→   874→                  <WaterfallChart rows={correlatedWaterfall} totalMs={Math.max(correlatedResult.client.roundTripMs, 1)} />
+   276→   875→                </div>
+   277→   876→
+   278→   877→                {/* Legend */}
+   279→   878→                <div className="flex flex-wrap gap-3 text-[10px]">
+   280→   879→                  {[{c:'bg-sky-400',l:'Browser fetch'},{c:'bg-amber-400',l:'Middleware'},{c:'bg-violet-500',l:'Handler'},{c:'bg-emerald-500',l:'DB'},{c:'bg-pink-300',l:'DNS'},{c:'bg-indigo-300',l:'TCP'},{c:'bg-yellow-300',l:'TLS/SSL'},{c:'bg-orange-300',l:'Server Wait'},{c:'bg-cyan-300',l:'Download'},{c:'bg-orange-400',l:'JSON Parse'},{c:'bg-rose-400',l:'React Render'}].map(x => (
+   281→   880→                    <span key={x.l} className="flex items-center gap-1"><span className={`w-3 h-2 rounded-sm ${x.c}`} />{x.l}</span>
+   282→   881→                  ))}
+   283→   882→                </div>
+   284→   883→
+   285→   884→                {/* Browser Perspective vs Server Perspective */}
+   286→   885→                <div className="grid gap-3 sm:grid-cols-3">
+   287→   886→                  {/* Browser Perspective */}
+   288→   887→                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" />Browser Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+   289→   888→                    <div className="flex justify-between"><span className="text-slate-500">fetch() called</span><span className="font-mono">{correlatedResult.client.fetchStart?.slice(11,23) ?? 'n/a'}</span></div>
+   290→   889→                    <div className="flex justify-between"><span className="text-slate-500">TTFB</span><span className="font-mono font-bold text-sky-700">{correlatedResult.client.ttfbMs}ms</span></div>
+   291→   890→                    <div className="flex justify-between"><span className="text-slate-500">JSON parse</span><span className="font-mono">{correlatedResult.client.jsonParseMs}ms</span></div>
+   292→   891→                    <div className="flex justify-between"><span className="text-slate-500">Round-trip</span><span className="font-mono font-bold">{correlatedResult.client.roundTripMs}ms</span></div>
+   293→   892→                    <Separator className="my-1" />
+   294→   893→                    <div className="flex justify-between"><span className="text-slate-500">Protocol</span><span className="font-mono">{correlatedResult.client.networkProtocol || 'n/a'}</span></div>
+   295→   894→                    <div className="flex justify-between"><span className="text-slate-500">Connection</span><span className="font-mono">{correlatedResult.client.connectionType}</span></div>
+   296→   895→                    <div className="flex justify-between"><span className="text-slate-500">Nav type</span><span className="font-mono">{correlatedResult.client.navigationType}</span></div>
+   297→   896→                    <div className="flex justify-between"><span className="text-slate-500">Observed res.</span><span className="font-mono">{correlatedResult.client.observedResources}</span></div>
+   298→   897→                    {correlatedResult.client.resourceTiming && (<>
+   299→   898→                      <Separator className="my-1" />
+   300→   899→                      <p className="text-[10px] text-slate-400 font-medium">Resource Timing API</p>
+   301→   900→                      <div className="flex justify-between"><span className="text-slate-500">DNS</span><span className="font-mono">{correlatedResult.client.resourceTiming.dnsMs}ms</span></div>
+   302→   901→                      <div className="flex justify-between"><span className="text-slate-500">TCP</span><span className="font-mono">{correlatedResult.client.resourceTiming.tcpMs}ms</span></div>
+   303→   902→                      <div className="flex justify-between"><span className="text-slate-500">SSL/TLS</span><span className="font-mono">{correlatedResult.client.resourceTiming.sslMs}ms</span></div>
+   304→   903→                      <div className="flex justify-between"><span className="text-slate-500">Request sent</span><span className="font-mono">{correlatedResult.client.resourceTiming.requestMs}ms</span></div>
+   305→   904→                      <div className="flex justify-between"><span className="text-slate-500">Response recv</span><span className="font-mono">{correlatedResult.client.resourceTiming.responseMs}ms</span></div>
+   306→   905→                      <div className="flex justify-between"><span className="text-slate-500">Transfer size</span><span className="font-mono">{correlatedResult.client.resourceTiming.transferSize}B</span></div>
+   307→   906→                      <div className="flex justify-between"><span className="text-slate-500">Encoded body</span><span className="font-mono">{correlatedResult.client.resourceTiming.encodedBodySize}B</span></div>
+   308→   907→                      <div className="flex justify-between"><span className="text-slate-500">Decoded body</span><span className="font-mono">{correlatedResult.client.resourceTiming.decodedBodySize}B</span></div>
+   309→   908→                    </>)}
+   310→   909→                  </CardContent></Card>
+   311→   910→
+   312→   911→                  {/* Server Perspective */}
+   313→   912→                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Server className="w-3.5 h-3.5" />Server Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+   314→   913→                    <div className="flex justify-between"><span className="text-slate-500">Middleware</span><span className="font-mono">{correlatedResult.server.middleware.startTs?.slice(11,23)} → {correlatedResult.server.middleware.endTs?.slice(11,23)} <span className="font-bold">({correlatedResult.server.middleware.durationMs}ms)</span></span></div>
+   315→   914→                    <div className="flex justify-between"><span className="text-slate-500">Handler</span><span className="font-mono">{correlatedResult.server.handler.durationMs}ms <span className="text-slate-400">(body parse: {correlatedResult.server.handler.bodyParseMs}ms)</span></span></div>
+   316→   915→                    <div className="flex justify-between"><span className="text-slate-500">DB write</span><span className="font-mono text-emerald-700">{correlatedResult.server.database.writeMs}ms</span></div>
+   317→   916→                    <div className="flex justify-between"><span className="text-slate-500">Records written</span><span className="font-mono">{correlatedResult.server.database.recordsWritten}</span></div>
+   318→   917→                    <Separator className="my-1" />
+   319→   918→                    <div className="flex justify-between"><span className="text-slate-500">Server total</span><span className="font-mono font-bold">{correlatedResult.correlation.serverTotalMs}ms</span></div>
+   320→   919→                    <div className="flex justify-between"><span className="text-slate-500">Browser overhead</span><span className="font-mono">{correlatedResult.correlation.browserOverheadMs ?? 0}ms</span></div>
+   321→   920→                    <div className="flex justify-between"><span className="text-slate-500">Network transit</span><span className="font-mono">{correlatedResult.correlation.networkTransitMs ?? 0}ms</span></div>
+   322→   921→                    <Separator className="my-1" />
+   323→   922→                    <div className="flex justify-between"><span className="text-slate-500">Request ID</span><span className="font-mono text-[10px]">{correlatedResult.requestId.slice(-12)}</span></div>
+   324→   923→                    <div className="flex justify-between"><span className="text-slate-500">Client IP</span><span className="font-mono text-[10px]">{correlatedResult.server.middleware.clientIp}</span></div>
+   325→   924→                    <div className="flex justify-between"><span className="text-slate-500">Trace persisted</span><span className="font-mono text-emerald-600">{correlatedResult.correlation.tracePersisted ? 'Yes' : 'No'}</span></div>
+   326→   925→                  </CardContent></Card>
+   327→   926→
+   328→   927→                  {/* Correlation Analysis */}
+   329→   928→                  <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Network className="w-3.5 h-3.5" />Correlation Analysis</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
+   330→   929→                    <div className="flex justify-between"><span className="text-slate-500">Client round-trip</span><span className="font-mono font-bold text-sky-700">{correlatedResult.correlation.totalEndToEndMs}ms</span></div>
+   331→   930→                    <div className="flex justify-between"><span className="text-slate-500">Server processing</span><span className="font-mono font-bold">{correlatedResult.correlation.serverTotalMs}ms</span></div>
+   332→   931→                    <Separator className="my-1" />
+   333→   932→                    <div className="flex justify-between"><span className="text-slate-500">Browser overhead</span><span className="font-mono">{correlatedResult.correlation.browserOverheadMs ?? 0}ms</span></div>
+   334→   933→                    <div className="flex justify-between"><span className="text-slate-500">Network transit</span><span className="font-mono">{correlatedResult.correlation.networkTransitMs ?? 0}ms</span></div>
+   335→   934→                    <div className="flex justify-between"><span className="text-slate-500">Clock delta</span><span className="font-mono">{correlatedResult.correlation.clockDeltaMs}ms</span></div>
+   336→   935→                    <Separator className="my-1" />
+   337→   936→                    <p className="text-[10px] text-slate-400 font-medium">How it works:</p>
+   338→   937→                    <p className="text-[10px] text-slate-500">The browser captures fetch start, TTFB, JSON parse, and render times using <code className="bg-slate-100 px-0.5 rounded">performance.now()</code>. It also reads the Resource Timing API for DNS/TCP/SSL breakdown. The server reads middleware-injected headers and times its own handler + DB work. Both are joined by the shared <code className="bg-slate-100 px-0.5 rounded">x-request-id</code> and persisted as a single <code className="bg-slate-100 px-0.5 rounded">CorrelatedTrace</code> row in SQLite.</p>
+   339→   938→                    <Separator className="my-1" />
+   340→   939→                    <p className="text-[10px] text-slate-400 font-medium">Component coverage:</p>
+   341→   940→                    <ul className="text-[10px] text-slate-500 space-y-0.5">
+   342→   941→                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />Browser (Performance API)</li>
+   343→   942→                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />Next.js Middleware</li>
+   344→   943→                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />API Route Handler</li>
+   345→   944→                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />SQLite Database (Prisma)</li>
+   346→   945→                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />Component Health Tracker</li>
+   347→   946→                      <li className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500" />PerformanceObserver (auto)</li>
+   348→   947→                    </ul>
+   349→   948→                  </CardContent></Card>
+   350→   949→                </div>
+   351→   950→
+   352→   951→                {/* Raw timing JSON */}
+   353→   952→                <details className="text-xs"><summary className="text-slate-500 cursor-pointer hover:text-slate-700">Raw Browser Timing JSON (from Performance API)</summary>
+   354→   953→                  <pre className="mt-2 bg-slate-900 text-emerald-400 rounded-lg p-3 text-[10px] font-mono max-h-48 overflow-y-auto">{(() => { try { return JSON.stringify(JSON.parse(correlatedResult.clientTimingJson ?? '{}'), null, 2); } catch { return correlatedResult.clientTimingJson ?? '{}'; } })()}</pre>
+   355→   954→                </details>
+   356→   955→              </CardContent></Card>
+   357→   956→            )}
+   358→   957→
+   359→   958→            {/* ── TRACE SUMMARY (aggregated) ── */}
+   360→   959→            {traceSummary && (
+   361→   960→              <Card><CardHeader className="pb-2">
+   362→   961→                <CardTitle className="text-sm flex items-center gap-2"><FileClock className="w-4 h-4" />Aggregated Trace Statistics <Badge variant="outline" className="text-[10px] ml-1">{traceSummary.total as number} total traces</Badge></CardTitle>
+   363→   962→              </CardHeader><CardContent className="space-y-4">
+   364→   963→                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+   365→   964→                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg TTFB</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.clientTtfbMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+   366→   965→                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Round-Trip</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.clientRoundTripMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+   367→   966→                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Handler</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.serverHandlerMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+   368→   967→                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg DB Write</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.serverDbWriteMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+   369→   968→                </div>
+   370→   969→                {/* Per-path breakdown */}
+   371→   970→                {traceSummary.byPath && Array.isArray(traceSummary.byPath) && (traceSummary.byPath as Array<Record<string, unknown>>).length > 0 && (
+   372→   971→                  <div className="max-h-40 overflow-y-auto">
+   373→   972→                    <Table><TableHeader><TableRow className="bg-slate-50">
+   374→   973→                      <TableHead className="text-xs">Endpoint</TableHead>
+   375→   974→                      <TableHead className="text-xs">Method</TableHead>
+   376→   975→                      <TableHead className="text-xs text-right">Count</TableHead>
+   377→   976→                      <TableHead className="text-xs text-right">Avg Client RT</TableHead>
+   378→   977→                      <TableHead className="text-xs text-right">Avg Handler</TableHead>
+   379→   978→                    </TableRow></TableHeader><TableBody>
+   380→   979→                      {(traceSummary.byPath as Array<Record<string, unknown>>).map((p, i) => (
+   381→   980→                        <TableRow key={i} className="hover:bg-slate-50/50">
+   382→   981→                          <TableCell className="font-mono text-[11px]">{p.path as string}</TableCell>
+   383→   982→                          <TableCell><Badge variant="outline" className="text-[10px]">{p.method as string}</Badge></TableCell>
+   384→   983→                          <TableCell className="text-[11px] font-mono text-right">{(p._count as Record<string, number>)?.id ?? 0}</TableCell>
+   385→   984→                          <TableCell className="text-[11px] font-mono text-right">{Math.round((p._avg as Record<string, number>)?.clientRoundTripMs ?? 0)}ms</TableCell>
+   386→   985→                          <TableCell className="text-[11px] font-mono text-right">{Math.round((p._avg as Record<string, number>)?.serverHandlerMs ?? 0)}ms</TableCell>
+   387→   986→                        </TableRow>
+   388→   987→                      ))}
+   389→   988→                    </TableBody></Table>
+   390→   989→                  </div>
+   391→   990→                )}
+   392→   991→              </CardContent></Card>
+   393→   992→            )}
+   394→   993→
+   395→   994→            {/* ── FULL TRACE HISTORY ── */}
+   396→   995→            {fullTraceHistory.length > 0 && (
+   397→   996→              <Card><CardHeader className="pb-2">
+   398→   997→                <CardTitle className="text-sm flex items-center gap-2"><History className="w-4 h-4" />Correlated Trace History ({fullTraceHistory.length})</CardTitle>
+   399→   998→                <CardDescription>All persisted client+server traces from the dedicated correlated-trace endpoint, sorted newest first</CardDescription>
+   400→   999→              </CardHeader><CardContent className="space-y-4">
+   401→  1000→                <div className="max-h-96 overflow-y-auto space-y-3">
+   402→  1001→                  {fullTraceHistory.map(t => (
+   403→  1002→                    <div key={t.id} className="border border-slate-200 rounded-lg p-3 space-y-2">
+   404→  1003→                      <div className="flex flex-wrap items-center gap-2 text-xs">
+   405→  1004→                        <Badge variant="outline" className="font-mono text-[10px] text-emerald-700 border-emerald-300">{t.method}</Badge>
+   406→  1005→                        <span className="font-mono text-slate-600">...{t.requestId.slice(-10)}</span>
+   407→  1006→                        <Badge variant="outline" className="text-[10px]">{t.statusCode}</Badge>
+   408→  1007→                        <span className="text-slate-400">{t.createdAt.slice(11, 19)}</span>
+   409→  1008→                        <span className="ml-auto font-mono font-bold text-slate-700">{t.totalEndToEndMs}ms E2E</span>
+   410→  1009→                        {t.clientNetworkProtocol && <Badge variant="outline" className="text-[9px]">{t.clientNetworkProtocol}</Badge>}
+   411→  1010→                      </div>
+   412→  1011→                      <WaterfallChart rows={buildHistoryWaterfall(t)} totalMs={Math.max(t.totalEndToEndMs, 1)} />
+   413→  1012→                      <div className="flex flex-wrap gap-3 text-[9px] text-slate-500">
+   414→  1013→                        <span>TTFB: <b>{t.clientTtfbMs}ms</b></span>
+   415→  1014→                        <span>Middleware: <b>{t.serverMiddlewareMs}ms</b></span>
+   416→  1015→                        <span>Handler: <b>{t.serverHandlerMs}ms</b></span>
+   417→  1016→                        <span>DB W: <b>{t.serverDbWriteMs}ms</b></span>
+   418→  1017→                        <span>JSON Parse: <b>{t.clientJsonParseMs}ms</b></span>
+   419→  1018→                        <span>Clock Delta: <b>{t.clientServerDeltaMs}ms</b></span>
+   420→  1019→                        <span>Round-Trip: <b className="text-sky-700">{t.clientRoundTripMs}ms</b></span>
+   421→  1020→                      </div>
+   422→  1021→                    </div>
+   423→  1022→                  ))}
+   424→  1023→                </div>
+   425→  1024→              </CardContent></Card>
+   426→  1025→            )}
+   427→  1026→
+   428→  1027→            {/* ── EMPTY STATE ── */}
+   429→  1028→            {!correlatedResult && batchResults.length === 0 && !traceSummary && fullTraceHistory.length === 0 && (
+   430→  1029→              <Card className="border-dashed"><CardContent className="py-12 text-center">
+   431→  1030→                <MousePointerClick className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+   432→  1031→                <p className="text-sm font-medium text-slate-600">No frontend traces yet</p>
+   433→  1032→                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">Click "Run Correlated Trace" to capture a full browser-side timing profile and correlate it with server-side middleware, handler, and database traces. Use "Batch Trace All APIs" to profile every endpoint on the site at once.</p>
+   434→  1033→              </CardContent></Card>
+   435→  1034→            )}
+   436→  1035→          </TabsContent>
+   437→  1036→
+   438→  1037→          {/* ══════════ FINDINGS TAB ══════════ */}
+   439→  1038→          <TabsContent value="findings"><Card><CardHeader className="pb-3"><div className="flex items-center justify-between"><div><CardTitle className="text-base">Audit Findings</CardTitle><CardDescription>{findings.length} findings from 11 compliance queries</CardDescription></div><div className="flex gap-2"><Badge variant="outline" className="text-xs">Critical: {findings.filter(f => f.severity === 'critical').length}</Badge><Badge variant="outline" className="text-xs">High: {findings.filter(f => f.severity === 'high').length}</Badge></div></div></CardHeader><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow className="bg-slate-50"><TableHead className="w-[180px]">Ref</TableHead><TableHead className="w-[80px]">Severity</TableHead><TableHead className="w-[100px]">Status</TableHead><TableHead className="w-[100px]">Risk</TableHead><TableHead>Title</TableHead><TableHead className="w-[60px] text-right">Rows</TableHead><TableHead className="w-[80px] text-right">MTTR</TableHead></TableRow></TableHeader><TableBody>{findings.map(f => (
+   440→  1039→                  <TableRow key={f.finding_ref} className="hover:bg-slate-50/50">
+   441→  1040→                    <TableCell className="font-mono text-xs">{f.finding_ref.slice(-12)}</TableCell>
+   442→  1041→                    <TableCell><Badge variant="outline" className={`text-xs ${severityColor(f.severity)}`}>{f.severity}</Badge></TableCell>
+   443→  1042→                    <TableCell><div className="flex items-center gap-1.5">{statusIcon(f.status)}<span className="text-xs capitalize">{f.status.replace('_', ' ')}</span></div></TableCell>
+   444→  1043→                    <TableCell className="text-xs text-slate-600 max-w-[100px] truncate">{categoryLabel(f.risk_category)}</TableCell>
+   445→  1044→                    <TableCell className="text-sm max-w-[300px] truncate">{f.title}</TableCell>
+   446→  1045→                    <TableCell className="text-right text-xs font-mono">{f.affected_row_count}</TableCell>
+   447→  1046→                    <TableCell className="text-right text-xs font-mono">{f.mttr_hours ? `${f.mttr_hours}h` : '-'}</TableCell>
+   448→  1047→                  </TableRow>
+   449→  1048→                ))}</TableBody></Table></div></CardContent></Card></TabsContent>
+   450→  1049→
+   451→  1050→          {/* ══════════ MTTR TAB ══════════ */}
+   452→  1051→          <TabsContent value="mttr"><div className="grid gap-4 lg:grid-cols-2">
+   453→  1052→            <Card><CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><TrendingDown className="w-4 h-4" /> MTTR by Risk Category</CardTitle><CardDescription>Mean time to resolution in hours</CardDescription></CardHeader><CardContent className="space-y-3">
+   454→  1053→              {mttr?.report.risk_categories.map(cat => { const pct = cat.total > 0 ? (cat.resolved / cat.total) * 100 : 0; return (
+   455→  1054→                <div key={cat.category} className="space-y-1"><div className="flex items-center justify-between text-sm"><span className="text-slate-700 font-medium">{categoryLabel(cat.category)}</span><span className="text-xs text-slate-500">{cat.resolved}/{cat.total} resolved</span></div><div className="flex items-center gap-3"><Progress value={pct} className="h-2 flex-1" /><span className="text-xs font-mono text-slate-600 w-16 text-right">{cat.avg_mttr_hours}h avg</span></div></div>
+   456→  1055→              ); })}
+   457→  1056→            </CardContent></Card>
+   458→  1057→            <Card><CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Activity className="w-4 h-4" /> 7-Day Trend</CardTitle><CardDescription>Daily MTTR and finding velocity</CardDescription></CardHeader><CardContent className="space-y-2">
+   459→  1058→              {mttr?.trend.map(day => (
+   460→  1059→                <div key={day.date} className="flex items-center gap-3 text-sm"><span className="text-xs font-mono text-slate-500 w-20">{day.date.slice(5)}</span><div className="flex-1 flex items-center gap-2"><div className="flex-1 bg-slate-100 rounded-full h-2 relative overflow-hidden"><div className="bg-slate-600 h-full rounded-full" style={{ width: `${(day.avg_mttr / 30) * 100}%` }} /></div><span className="text-xs font-mono w-10 text-right">{day.avg_mttr}h</span></div><div className="flex items-center gap-1 text-xs text-slate-500 w-20"><span className="text-amber-600">+{day.new_findings}</span><span>/</span><span className="text-emerald-600">-{day.resolved}</span></div></div>
+   461→  1060→              ))}
+   462→  1061→            </CardContent></Card>
+   463→  1062→          </div></TabsContent>
+   464→  1063→
+   465→  1064→          {/* ══════════ EDI PROFILES TAB ══════════ */}
+   466→  1065→          <TabsContent value="profiles"><Card><CardHeader className="pb-3"><div className="flex items-center justify-between"><div><CardTitle className="text-base">EDI Connection Profiles</CardTitle><CardDescription>{profiles.filter(p => p.compliant).length}/{profiles.length} partners compliant</CardDescription></div></div></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow className="bg-slate-50"><TableHead>Partner</TableHead><TableHead>Standard</TableHead><TableHead>Encryption</TableHead><TableHead>Protocol</TableHead><TableHead>Status</TableHead><TableHead>Issues</TableHead></TableRow></TableHeader><TableBody>{profiles.map(p => (
+   467→  1066→                <TableRow key={p.partner_id} className="hover:bg-slate-50/50">
+   468→  1067→                  <TableCell className="font-medium">{p.partner_name}</TableCell>
+   469→  1068→                  <TableCell><Badge variant="outline" className="text-xs font-mono">{p.edi_standard}</Badge></TableCell>
+   470→  1069→                  <TableCell>{p.encrypted ? <Lock className="w-4 h-4 text-emerald-600" /> : <Unlock className="w-4 h-4 text-red-500" />}</TableCell>
+   471→  1070→                  <TableCell className="text-xs font-mono">{p.protocol}</TableCell>
+   472→  1071→                  <TableCell><Badge className={`text-xs ${p.compliant ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>{p.compliant ? 'Compliant' : 'Non-Compliant'}</Badge></TableCell>
+   473→  1072→                  <TableCell className="text-xs text-red-600">{p.issues.join('; ') || '-'}</TableCell>
+   474→  1073→                </TableRow>
+   475→  1074→              ))}</TableBody></Table></CardContent></Card></TabsContent>
+   476→  1075→
+   477→  1076→          {/* ══════════ POLICIES TAB ══════════ */}
+   478→  1077→          <TabsContent value="policies"><Card><CardHeader className="pb-3"><div className="flex items-center justify-between"><div><CardTitle className="text-base">Masking Policies</CardTitle><CardDescription>{policies.filter(p => p.enabled).length} active / {policies.filter(p => p.auto_generated).length} auto-generated</CardDescription></div><Button size="sm" variant="outline" onClick={async () => { await fetch('/api/compliance/remediate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'dry-run' }) }); await fetchData(); }}><Wrench className="mr-1.5 h-3.5 w-3.5" />Generate Policies</Button></div></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow className="bg-slate-50"><TableHead>Policy Name</TableHead><TableHead>Field</TableHead><TableHead>Action</TableHead><TableHead>GDPR</TableHead><TableHead>Enabled</TableHead><TableHead>Source</TableHead></TableRow></TableHeader><TableBody>{policies.map(p => (
+   479→  1078→                <TableRow key={p.id} className="hover:bg-slate-50/50">
+   480→  1079→                  <TableCell className="font-mono text-xs">{p.name}</TableCell>
+   481→  1080→                  <TableCell className="text-xs font-mono">{p.field_name}</TableCell>
+   482→  1081→                  <TableCell><Badge variant="outline" className="text-xs">{p.action}</Badge></TableCell>
+   483→  1082→                  <TableCell className="text-xs">{p.gdpr_article}</TableCell>
+   484→  1083→                  <TableCell><Badge className={`text-xs ${p.enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}`}>{p.enabled ? 'Active' : 'Staged'}</Badge></TableCell>
+   485→  1084→                  <TableCell>{p.auto_generated ? <Badge variant="outline" className="text-xs">Auto</Badge> : <Badge variant="outline" className="text-xs">Manual</Badge>}</TableCell>
+   486→  1085→                </TableRow>
+   487→  1086→              ))}</TableBody></Table></CardContent></Card></TabsContent>
+   488→  1087→
+   489→  1088→          {/* ══════════ API ENDPOINTS TAB ══════════ */}
+   490→  1089→          <TabsContent value="endpoints"><Card><CardHeader className="pb-3"><CardTitle className="text-base">API Endpoints</CardTitle><CardDescription>All compliance swarm endpoints available to the frontend</CardDescription></CardHeader><CardContent className="space-y-2">
+   491→  1090→            {[
+   492→  1091→              { method: 'GET', path: '/api/system/correlated-trace', desc: '[FRONTEND TRACE] API info and availability check', live: true },
+   493→  1092→              { method: 'POST', path: '/api/system/correlated-trace', desc: '[FRONTEND TRACE] Ingest browser Resource Timing + correlate with server, persist', live: true },
+   494→  1093→              { method: 'GET', path: '/api/system/correlated-trace?mode=history', desc: '[FRONTEND TRACE] Retrieve stored correlated traces', live: true },
+   495→  1094→              { method: 'GET', path: '/api/system/correlated-trace?mode=summary', desc: '[FRONTEND TRACE] Aggregated stats (avg TTFB, per-path breakdown)', live: true },
+   496→  1095→              { method: 'GET', path: '/api/system/ping', desc: '[CORRELATED] Full client+server trace with Performance API timing', live: true },
+   497→  1096→              { method: 'GET', path: '/api/system/ping?trace=history', desc: '[CORRELATED] Load stored trace history from DB', live: true },
+   498→  1097→              { method: 'POST', path: '/api/system/ping', desc: '[CORRELATED] Write event + browser timing to DB', live: true },
+   499→  1098→              { method: 'GET', path: '/api/compliance/health', desc: 'Health check + tool status', live: false },
+   500→  1099→              { method: 'GET', path: '/api/compliance/findings', desc: 'List audit findings', live: false },
+   501→  1100→              { method: 'GET', path: '/api/compliance/mttr', desc: 'MTTR report by risk category + 7-day trend', live: false },
+   502→  1101→              { method: 'GET', path: '/api/compliance/policies', desc: 'List masking policies', live: false },
+   503→  1102→              { method: 'GET', path: '/api/compliance/profiles', desc: 'EDI connection profiles audit', live: false },
+   504→  1103→              { method: 'POST', path: '/api/compliance/audit', desc: 'Run full EDI compliance audit', live: false },
+   505→  1104→              { method: 'POST', path: '/api/compliance/remediate', desc: 'Generate remediation policies', live: false },
+   506→  1105→            ].map(ep => (
+   507→  1106→              <div key={ep.path + ep.method} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50">
+   508→  1107→                <Badge variant="outline" className={`font-mono text-xs w-14 justify-center ${ep.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-blue-700 border-blue-300'}`}>{ep.method}</Badge>
+   509→  1108→                <code className={`text-sm font-mono flex-1 ${ep.live ? 'text-slate-900 font-semibold' : 'text-slate-800'}`}>{ep.path}</code>
+   510→  1109→                {ep.live && <Badge className="text-[9px] bg-emerald-100 text-emerald-700 border-emerald-200">{ep.desc.includes('FRONTEND TRACE') ? 'FRONTEND TRACE' : 'CORRELATED'}</Badge>}
+   511→  1110→                <span className="text-xs text-slate-500 max-w-[250px] truncate hidden sm:inline">{ep.desc}</span>
+   512→  1111→              </div>
+   513→  1112→            ))}
+   514→  1113→            <Separator className="my-3" />
+   515→  1114→            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3"><p className="text-xs text-emerald-800 font-medium">CORRELATED endpoints capture browser Performance API timings (fetch start, TTFB, JSON parse, render) and join them with server-side middleware/handler/DB traces via a shared request ID. All traces are persisted in SQLite.</p></div>
+   516→  1115→          </CardContent></Card></TabsContent>
+   517→  1116→        </Tabs>
+   518→  1117→      </main>
+   519→  1118→    </div>
+   520→  1119→  );
+   521→  1120→}
+   522→  1121→

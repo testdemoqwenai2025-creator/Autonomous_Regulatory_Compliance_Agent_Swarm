@@ -309,3 +309,82 @@ model RateLimitEntry {
 
   @@index([clientIp, path, windowStart])
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  FULL-SITE OBSERVABILITY — Endpoint Traces & Spans
+// ═══════════════════════════════════════════════════════════════
+
+model EndpointTrace {
+  id                  String              @id @default(cuid())
+  traceId             String              @unique   // client-generated correlation id
+  requestId           String                        // middleware-injected x-request-id
+  initiatedBy         String              @default("manual")  // manual | auto_page_load | auto_interval
+  clientIp            String              @default("")
+  userAgent           String              @default("")
+  navigationType      String              @default("")
+  connectionType      String              @default("")
+  pageUrl             String              @default("")
+  browserTtfbAvgMs    Float               @default(0)
+  browserRoundTripAvgMs Float              @default(0)
+  longTaskCount       Int                 @default(0)
+  longTaskTotalMs     Int                 @default(0)
+  memoryUsedMb        Float               @default(0)
+  memoryLimitMb       Float               @default(0)
+  domNodes            Int                 @default(0)
+  resourceCount       Int                 @default(0)
+  totalEndpointsHit   Int                 @default(0)
+  totalEndpointsOk    Int                 @default(0)
+  totalEndpointsFail  Int                 @default(0)
+  serverMiddlewareAvgMs Float              @default(0)
+  serverHandlerAvgMs  Float               @default(0)
+  serverDbWriteAvgMs  Float               @default(0)
+  serverDbReadAvgMs   Float               @default(0)
+  totalEndToEndMs     Int                 @default(0)
+  createdAt           DateTime            @default(now())
+
+  spans               EndpointTraceSpan[]
+
+  @@index([traceId])
+  @@index([createdAt])
+}
+
+model EndpointTraceSpan {
+  id                  String              @id @default(cuid())
+  traceId             String
+  endpoint            String
+  method              String              @default("GET")
+  statusCode          Int                 @default(0)
+
+  // Client-side (browser) timing
+  clientFetchStartMs  Int                 @default(0)
+  clientDnsMs         Int                 @default(0)
+  clientTcpMs         Int                 @default(0)
+  clientSslMs         Int                 @default(0)
+  clientTtfbMs        Int                 @default(0)
+  clientResponseMs    Int                 @default(0)
+  clientRoundTripMs   Int                 @default(0)
+  clientJsonParseMs   Int                 @default(0)
+  clientTransferSize  Int                 @default(0)
+  clientEncodedSize   Int                 @default(0)
+  clientDecodedSize   Int                 @default(0)
+  clientProtocol      String              @default("")
+
+  // Server-side timing (from response headers)
+  serverMiddlewareMs  Int                 @default(0)
+  serverHandlerMs     Int                 @default(0)
+  serverDbWriteMs     Int                 @default(0)
+  serverDbReadMs      Int                 @default(0)
+
+  // Derived
+  networkTransitMs    Int                 @default(0)   // ttfbMs - middlewareMs - handlerMs
+  browserOverheadMs   Int                 @default(0)   // roundTripMs - ttfbMs
+
+  error               String              @default("")
+  createdAt           DateTime            @default(now())
+
+  trace               EndpointTrace       @relation(fields: [traceId], references: [traceId], onDelete: Cascade)
+
+  @@index([traceId])
+  @@index([endpoint])
+  @@index([statusCode])
+}

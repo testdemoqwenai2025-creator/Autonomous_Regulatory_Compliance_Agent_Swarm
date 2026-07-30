@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { startTiming, applyTimingHeaders } from '@/lib/timing-headers';
 
 // Sample MTTR data - in production this queries the Golang MTTR Tracker
 const MTTR_DATA = {
@@ -37,6 +38,7 @@ const MTTR_DATA = {
   ],
 };
 
-export async function GET() {
-  return NextResponse.json(MTTR_DATA);
+export async function GET(request: NextRequest) {
+  const t = startTiming(request);
+  return applyTimingHeaders(NextResponse.json(MTTR_DATA), t);
 }

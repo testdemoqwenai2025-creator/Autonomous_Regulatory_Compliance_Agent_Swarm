@@ -1,9 +1,11 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { startTiming, applyTimingHeaders } from '@/lib/timing-headers';
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const t = startTiming(request);
   const body = await request.json();
   // In production: delegates to Manifest_PII_Anonymiser
-  return NextResponse.json({
+  return applyTimingHeaders(NextResponse.json({
     status: 'processed',
     tool: 'Manifest_PII_Anonymiser',
     manifest_id: body.manifest_id || 'unknown',
@@ -11,5 +13,5 @@ export async function POST(request: Request) {
     tokens_generated: 6,
     audit_records: 6,
     mode: body.dry_run ? 'dry-run' : 'applied',
-  });
+  }), t);
 }

@@ -7,7 +7,7 @@ import {
   CheckCircle2, XCircle, Loader2, RefreshCw, Lock,
   Unlock, TrendingDown, Server, Database,
   Globe, ArrowRight, Zap, Layers, Monitor,
-  Send, CircuitBoard, Wifi, Check, Fingerprint,
+  Send, CircuitBoard, Wifi, Check, Fingerprint, Thermometer, GanttChart, Gauge,
   ArrowDownLeft, Network, Eye, History, BarChart3,
   MousePointerClick, Radio, FileClock, Flame,
 } from 'lucide-react';
@@ -23,6 +23,7 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import { useRequestTracer, ObservedResource } from '@/hooks/useRequestTracer';
+import { useEndpointTracer, StoredEndpointTrace, TraceSummary, StoredSpan } from '@/hooks/useEndpointTracer';
 
 // ═══════════════════════════════════════════════════════════════════
 //  TYPES
@@ -230,6 +231,17 @@ export default function ComplianceDashboard() {
   const [traceSummaryLoading, setTraceSummaryLoading] = useState(false);
   const [fullTraceHistory, setFullTraceHistory] = useState<StoredTrace[]>([]);
   const [fullHistoryLoading, setFullHistoryLoading] = useState(false);
+
+  // ── Full-Site Observability (ep-trace) ──
+  const {
+    runFullTrace, isTracing: epTracing,
+    lastTraceResult: epResult,
+    traceHistory: epHistory,
+    traceSummary: epSummary,
+    loadTraceHistory: loadEpHistory,
+    loadTraceSummary: loadEpSummary,
+  } = useEndpointTracer();
+  const [epHistoryLoaded, setEpHistoryLoaded] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -611,9 +623,10 @@ export default function ComplianceDashboard() {
 
         {/* Tabs */}
         <Tabs defaultValue="pipeline" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-7">
+          <TabsList className="grid w-full grid-cols-8">
             <TabsTrigger value="pipeline" className="text-xs sm:text-sm">Pipeline</TabsTrigger>
-            <TabsTrigger value="frontend-trace" className="text-xs sm:text-sm flex items-center gap-1"><MousePointerClick className="w-3 h-3" />Frontend Trace</TabsTrigger>
+            <TabsTrigger value="frontend-trace" className="text-xs sm:text-sm flex items-center gap-1"><MousePointerClick className="w-3 h-3" />Frontend</TabsTrigger>
+            <TabsTrigger value="observability" className="text-xs sm:text-sm flex items-center gap-1"><Thermometer className="w-3 h-3" />Observe</TabsTrigger>
             <TabsTrigger value="findings" className="text-xs sm:text-sm">Findings</TabsTrigger>
             <TabsTrigger value="mttr" className="text-xs sm:text-sm">MTTR</TabsTrigger>
             <TabsTrigger value="profiles" className="text-xs sm:text-sm">EDI Profiles</TabsTrigger>
@@ -1034,6 +1047,228 @@ export default function ComplianceDashboard() {
             )}
           </TabsContent>
 
+          {/* ══════════ OBSERVABILITY TAB (Full-Site Ep Trace) ══════════ */}
+          <TabsContent value="observability" className="space-y-4">
+            {/* Top bar: Run trace + summary button */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <Button
+                size="sm"
+                onClick={async () => { const r = await runFullTrace(); if (r) setTimeout(() => loadEpHistory(10), 400); }}
+                disabled={epTracing}
+              >
+                {epTracing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <GanttChart className="mr-1.5 h-3.5 w-3.5" />}
+                {epTracing ? `Tracing ${epResult?.summary.endpointsHit ?? '...'} endpoints...` : 'Run Full-Site Trace'}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => { loadEpHistory(10); setEpHistoryLoaded(true); }} disabled={epHistoryLoaded}>
+                <History className="mr-1.5 h-3.5 w-3.5" />Load History
+              </Button>
+              <Button size="sm" variant="outline" onClick={loadEpSummary}>
+                <BarChart3 className="mr-1.5 h-3.5 w-3.5" />Summary
+              </Button>
+              {epResult && (
+                <Badge variant="outline" className="font-mono text-xs text-emerald-700 border-emerald-300">
+                  Last: {epResult.summary.endpointsHit} eps, {epResult.summary.avgRoundTripMs}ms avg RTT
+                </Badge>
+              )}
+            </div>
+
+            {/* KPIs from last trace result */}
+            {epResult && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+                <KPICard icon={Zap} label="Endpoints Hit" value={epResult.summary.endpointsHit} sub={`${epResult.summary.endpointsOk} OK / ${epResult.summary.endpointsFailed} fail`} />
+                <KPICard icon={Gauge} label="Avg TTFB" value={`${epResult.summary.avgTtfbMs}ms`} sub="Time to first byte" />
+                <KPICard icon={Activity} label="Avg Round Trip" value={`${epResult.summary.avgRoundTripMs}ms`} sub="Browser-side total" />
+                <KPICard icon={Layers} label="Avg Middleware" value={`${epResult.summary.avgMiddlewareMs}ms`} sub="Edge processing" />
+                <KPICard icon={Monitor} label="Avg Handler" value={`${epResult.summary.avgHandlerMs}ms`} sub="Server handler" />
+                <KPICard icon={Database} label="Avg DB Write" value={`${epResult.summary.avgDbWriteMs}ms`} sub="SQLite persist" />
+              </div>
+            )}
+
+            {/* Browser-level metrics from last trace */}
+            {epResult && (
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Eye className="w-4 h-4" />Browser Environment (at trace time)</CardTitle></CardHeader><CardContent>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                  <div><span className="text-slate-500">Memory Used</span><p className="font-semibold">{epResult.browserMetrics.memoryUsedMb} MB</p><p className="text-xs text-slate-400">of {epResult.browserMetrics.memoryLimitMb} MB limit</p></div>
+                  <div><span className="text-slate-500">DOM Nodes</span><p className="font-semibold">{epResult.browserMetrics.domNodes}</p></div>
+                  <div><span className="text-slate-500">Long Tasks</span><p className="font-semibold">{epResult.browserMetrics.longTaskCount}</p><p className="text-xs text-slate-400">{epResult.browserMetrics.longTaskTotalMs}ms total</p></div>
+                  <div><span className="text-slate-500">Resources</span><p className="font-semibold">{epResult.browserMetrics.resourceCount}</p><p className="text-xs text-slate-400">tracked by browser</p></div>
+                  <div><span className="text-slate-500">Connection</span><p className="font-semibold">{epResult.browserMetrics.roundTripAvgMs > 0 ? '' : 'N/A'}</p><p className="text-xs text-slate-400">{typeof window !== 'undefined' ? ((navigator as Record<string, unknown>).connection as Record<string, unknown>)?.effectiveType ?? 'unknown' : ''}</p></div>
+                  <div><span className="text-slate-500">Trace ID</span><p className="font-mono text-xs font-semibold text-emerald-700 truncate">{epResult.traceId}</p></div>
+                  <div><span className="text-slate-500">Server Timing</span><p className="font-semibold">{epResult.serverTiming.handlerMs}ms</p><p className="text-xs text-slate-400">handler | {epResult.serverTiming.dbWriteMs}ms db write</p></div>
+                  <div><span className="text-slate-500">Total Traces</span><p className="font-semibold">{epResult.stats.totalEpTraces}</p><p className="text-xs text-slate-400">{epResult.stats.totalEpSpans} spans</p></div>
+                </div>
+              </CardContent></Card>
+            )}
+
+            {/* Flame/Waterfall chart from last trace result spans */}
+            {epResult && epResult.summary.endpointsHit > 0 && (
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Flame className="w-4 h-4" />Endpoint Waterfall — All Components Correlated</CardTitle><CardDescription>Browser timing (TTFB, round-trip, DNS, TCP, SSL, transfer) correlated with server middleware, handler, and DB timings per endpoint.</CardDescription></CardHeader><CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead><tr className="border-b border-slate-200 text-slate-500">
+                      <th className="text-left py-2 pr-3 font-medium">Endpoint</th>
+                      <th className="text-right py-2 px-1 font-medium">Status</th>
+                      <th className="text-right py-2 px-1 font-medium w-[60px]">TTFB</th>
+                      <th className="text-right py-2 px-1 font-medium w-[60px]">RT</th>
+                      <th className="text-right py-2 px-1 font-medium w-[50px]">MW</th>
+                      <th className="text-right py-2 px-1 font-medium w-[50px]">Handler</th>
+                      <th className="text-right py-2 px-1 font-medium w-[50px]">DB-W</th>
+                      <th className="text-right py-2 px-1 font-medium w-[50px]">Net</th>
+                      <th className="text-right py-2 px-1 font-medium w-[50px]">Parse</th>
+                      <th className="text-right py-2 px-1 font-medium w-[60px]">Size</th>
+                      <th className="text-left py-2 pl-1 font-medium w-[200px]">Waterfall</th>
+                    </tr></thead>
+                    <tbody>
+                      {/* We need spans from the trace result — they're in the DB, so we show what the summary tells us */}
+                      <tr className="border-b border-slate-100"><td colSpan={11} className="py-6 text-center text-slate-400">Trace spans persisted. Click "Load History" to view detailed per-endpoint waterfall breakdowns.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent></Card>
+            )}
+
+            {/* Summary stats from aggregate endpoint */}
+            {epSummary && (
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><BarChart3 className="w-4 h-4" />Aggregate Summary (All Traces)</CardTitle></CardHeader><CardContent>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                  <div><span className="text-slate-500">Total Traces</span><p className="font-semibold">{epSummary.traces.total}</p></div>
+                  <div><span className="text-slate-500">Total Spans</span><p className="font-semibold">{epSummary.spans.total}</p><p className="text-xs text-slate-400">{epSummary.spans.errorRate} error rate</p></div>
+                  <div><span className="text-slate-500">Avg TTFB</span><p className="font-semibold">{Math.round((epSummary.spans.aggregates._avg?.clientTtfbMs ?? 0))}ms</p></div>
+                  <div><span className="text-slate-500">Avg Round Trip</span><p className="font-semibold">{Math.round((epSummary.spans.aggregates._avg?.clientRoundTripMs ?? 0))}ms</p></div>
+                </div>
+                {/* Per-endpoint breakdown */}
+                {epSummary.byEndpoint.length > 0 && (
+                  <div className="mt-4 overflow-x-auto">
+                    <p className="text-xs font-medium text-slate-500 mb-2">Per-Endpoint Breakdown</p>
+                    <table className="w-full text-xs">
+                      <thead><tr className="border-b border-slate-200 text-slate-500">
+                        <th className="text-left py-1.5 pr-3">Endpoint</th>
+                        <th className="text-right py-1.5 px-2">Calls</th>
+                        <th className="text-right py-1.5 px-2">Avg TTFB</th>
+                        <th className="text-right py-1.5 px-2">Avg RT</th>
+                        <th className="text-right py-1.5 px-2">Min RT</th>
+                        <th className="text-right py-1.5 px-2">Max RT</th>
+                        <th className="text-right py-1.5 px-2">Avg Handler</th>
+                        <th className="text-right py-1.5 px-2">Avg MW</th>
+                      </tr></thead>
+                      <tbody>
+                        {epSummary.byEndpoint.map((ep, i) => (
+                          <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
+                            <td className="py-1.5 pr-3 font-mono text-slate-700 truncate max-w-[280px]" title={ep.endpoint}>{ep.endpoint.replace('/api/', '')}</td>
+                            <td className="text-right py-1.5 px-2">{ep._count.id}</td>
+                            <td className="text-right py-1.5 px-2">{Math.round(ep._avg.clientTtfbMs ?? 0)}ms</td>
+                            <td className="text-right py-1.5 px-2 font-semibold">{Math.round(ep._avg.clientRoundTripMs ?? 0)}ms</td>
+                            <td className="text-right py-1.5 px-2 text-emerald-600">{Math.round(ep._min.clientRoundTripMs ?? 0)}ms</td>
+                            <td className="text-right py-1.5 px-2 text-red-500">{Math.round(ep._max.clientRoundTripMs ?? 0)}ms</td>
+                            <td className="text-right py-1.5 px-2">{Math.round(ep._avg.serverHandlerMs ?? 0)}ms</td>
+                            <td className="text-right py-1.5 px-2">{Math.round(ep._avg.serverMiddlewareMs ?? 0)}ms</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent></Card>
+            )}
+
+            {/* History: stored traces with spans */}
+            {epHistory.length > 0 && (
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><History className="w-4 h-4" />Trace History</CardTitle></CardHeader><CardContent className="space-y-3">
+                {epHistory.map((trace: StoredEndpointTrace) => (
+                  <div key={trace.id} className="border border-slate-200 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="font-mono text-[10px]">{trace.traceId.slice(0, 20)}</Badge>
+                        <Badge variant="secondary" className="text-[10px]">{trace.initiatedBy}</Badge>
+                        <span className="text-[10px] text-slate-400">{new Date(trace.createdAt).toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-slate-500">{trace.totalEndpointsHit} endpoints</span>
+                        <span className={trace.totalEndpointsFail > 0 ? 'text-red-500 font-medium' : 'text-emerald-600'}>{trace.totalEndpointsOk} OK{trace.totalEndpointsFail > 0 ? ` / ${trace.totalEndpointsFail} fail` : ''}</span>
+                        <span className="text-slate-500">Avg RT: {Math.round(trace.browserRoundTripAvgMs)}ms</span>
+                        {trace.memoryUsedMb > 0 && <span className="text-slate-400">Mem: {trace.memoryUsedMb}MB</span>}
+                        {trace.longTaskCount > 0 && <span className="text-amber-500">{trace.longTaskCount} long tasks ({trace.longTaskTotalMs}ms)</span>}
+                      </div>
+                    </div>
+                    {/* Per-span waterfall for this trace */}
+                    {trace.spans.length > 0 && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-[10px]">
+                          <thead><tr className="border-b border-slate-100 text-slate-400">
+                            <th className="text-left py-1 pr-2">Endpoint</th>
+                            <th className="text-right py-1 px-1">Code</th>
+                            <th className="text-right py-1 px-1">TTFB</th>
+                            <th className="text-right py-1 px-1">RT</th>
+                            <th className="text-right py-1 px-1">MW</th>
+                            <th className="text-right py-1 px-1">Hnd</th>
+                            <th className="text-right py-1 px-1">DBW</th>
+                            <th className="text-right py-1 px-1">Net</th>
+                            <th className="text-right py-1 px-1">Brow</th>
+                            <th className="text-right py-1 px-1">Size</th>
+                            <th className="text-left py-1 pl-1 w-[180px]">Waterfall</th>
+                          </tr></thead>
+                          <tbody>
+                            {trace.spans.map((span: StoredSpan) => {
+                              const maxMs = Math.max(...trace.spans.map(s => s.clientRoundTripMs), 1);
+                              const netPct = (span.networkTransitMs / maxMs) * 100;
+                              const mwPct = (span.serverMiddlewareMs / maxMs) * 100;
+                              const hndPct = (span.serverHandlerMs / maxMs) * 100;
+                              const dbwPct = (span.serverDbWriteMs / maxMs) * 100;
+                              const parsePct = (span.clientJsonParseMs / maxMs) * 100;
+                              const browPct = (span.browserOverheadMs / maxMs) * 100;
+                              return (
+                                <tr key={span.id} className="border-b border-slate-50 hover:bg-slate-50">
+                                  <td className="py-1 pr-2 font-mono text-slate-600 truncate max-w-[200px]" title={span.endpoint}>{span.endpoint.replace('/api/', '')}</td>
+                                  <td className={`text-right py-1 px-1 font-medium ${span.statusCode < 400 ? 'text-emerald-600' : 'text-red-500'}`}>{span.statusCode}</td>
+                                  <td className="text-right py-1 px-1">{span.clientTtfbMs}</td>
+                                  <td className="text-right py-1 px-1 font-semibold">{span.clientRoundTripMs}</td>
+                                  <td className="text-right py-1 px-1">{span.serverMiddlewareMs}</td>
+                                  <td className="text-right py-1 px-1">{span.serverHandlerMs}</td>
+                                  <td className="text-right py-1 px-1">{span.serverDbWriteMs}</td>
+                                  <td className="text-right py-1 px-1">{span.networkTransitMs}</td>
+                                  <td className="text-right py-1 px-1">{span.browserOverheadMs}</td>
+                                  <td className="text-right py-1 px-1">{span.clientTransferSize > 0 ? `${(span.clientTransferSize / 1024).toFixed(1)}K` : '-'}</td>
+                                  <td className="py-1 pl-1">
+                                    <div className="flex h-3 rounded-sm overflow-hidden bg-slate-100 w-full">
+                                      <div className="bg-sky-300" style={{ width: `${netPct}%` }} title={`Net: ${span.networkTransitMs}ms`} />
+                                      <div className="bg-amber-400" style={{ width: `${mwPct}%` }} title={`MW: ${span.serverMiddlewareMs}ms`} />
+                                      <div className="bg-violet-500" style={{ width: `${hndPct}%` }} title={`Handler: ${span.serverHandlerMs}ms`} />
+                                      <div className="bg-emerald-500" style={{ width: `${dbwPct}%` }} title={`DB: ${span.serverDbWriteMs}ms`} />
+                                      <div className="bg-orange-400" style={{ width: `${parsePct}%` }} title={`Parse: ${span.clientJsonParseMs}ms`} />
+                                      <div className="bg-rose-400" style={{ width: `${browPct}%` }} title={`Browser: ${span.browserOverheadMs}ms`} />
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {/* Legend */}
+                        <div className="flex items-center gap-3 mt-1.5 text-[9px] text-slate-400">
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-sky-300" />Network</span>
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400" />Middleware</span>
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-violet-500" />Handler</span>
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />DB</span>
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-orange-400" />Parse</span>
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-rose-400" />Browser</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </CardContent></Card>
+            )}
+
+            {/* Empty state */}
+            {!epResult && epHistory.length === 0 && !epTracing && (
+              <Card><CardContent className="p-8 text-center">
+                <GanttChart className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm text-slate-500">Click <strong>"Run Full-Site Trace"</strong> to hit every endpoint in the system, capture browser-side Performance API timings (DNS, TCP, SSL, TTFB, round-trip, transfer size), read server-side timing from response headers (middleware, handler, DB), and persist the correlated trace.</p>
+                <p className="text-xs text-slate-400 mt-2">All timing data is collected client-side using the Resource Timing API and Server Timing headers, then sent to <code className="bg-slate-100 px-1 rounded">/api/system/observability/ep-trace</code> for persistence and analysis.</p>
+              </CardContent></Card>
+            )}
+          </TabsContent>
+
           {/* ══════════ FINDINGS TAB ══════════ */}
           <TabsContent value="findings"><Card><CardHeader className="pb-3"><div className="flex items-center justify-between"><div><CardTitle className="text-base">Audit Findings</CardTitle><CardDescription>{findings.length} findings from 11 compliance queries</CardDescription></div><div className="flex gap-2"><Badge variant="outline" className="text-xs">Critical: {findings.filter(f => f.severity === 'critical').length}</Badge><Badge variant="outline" className="text-xs">High: {findings.filter(f => f.severity === 'high').length}</Badge></div></div></CardHeader><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow className="bg-slate-50"><TableHead className="w-[180px]">Ref</TableHead><TableHead className="w-[80px]">Severity</TableHead><TableHead className="w-[100px]">Status</TableHead><TableHead className="w-[100px]">Risk</TableHead><TableHead>Title</TableHead><TableHead className="w-[60px] text-right">Rows</TableHead><TableHead className="w-[80px] text-right">MTTR</TableHead></TableRow></TableHeader><TableBody>{findings.map(f => (
                   <TableRow key={f.finding_ref} className="hover:bg-slate-50/50">
@@ -1102,6 +1337,8 @@ export default function ComplianceDashboard() {
               { method: 'GET', path: '/api/compliance/profiles', desc: 'EDI connection profiles audit', live: false },
               { method: 'POST', path: '/api/compliance/audit', desc: 'Run full EDI compliance audit', live: false },
               { method: 'POST', path: '/api/compliance/remediate', desc: 'Generate remediation policies', live: false },
+              { method: 'GET', path: '/api/system/observability/ep-trace', desc: 'Full-site observability trace (all endpoints)', live: true },
+              { method: 'GET', path: '/api/system/observability/ep-trace?mode=summary', desc: 'Aggregate stats across all traces', live: false },
             ].map(ep => (
               <div key={ep.path + ep.method} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50">
                 <Badge variant="outline" className={`font-mono text-xs w-14 justify-center ${ep.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-blue-700 border-blue-300'}`}>{ep.method}</Badge>
@@ -1111,7 +1348,7 @@ export default function ComplianceDashboard() {
               </div>
             ))}
             <Separator className="my-3" />
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3"><p className="text-xs text-emerald-800 font-medium">CORRELATED endpoints capture browser Performance API timings (fetch start, TTFB, JSON parse, render) and join them with server-side middleware/handler/DB traces via a shared request ID. All traces are persisted in SQLite.</p></div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3"><p className="text-xs text-emerald-800 font-medium">CORRELATED endpoints capture browser Performance API timings (fetch start, TTFB, JSON parse, render) and join them with server-side middleware/handler/DB traces via a shared request ID. All traces are persisted in SQLite. The <strong>Observe</strong> tab runs a full-site trace across ALL endpoints.</p></div>
           </CardContent></Card></TabsContent>
         </Tabs>
       </main>

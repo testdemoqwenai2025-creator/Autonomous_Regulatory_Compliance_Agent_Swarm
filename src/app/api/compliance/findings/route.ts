@@ -1,4 +1,10 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { startTiming, applyTimingHeaders, timedRead } from '@/lib/timing-headers';
+import { PrismaClient } from '@prisma/client';
+
+function freshDb() {
+  return new PrismaClient({ log: [] });
+}
 
 // Sample audit findings data - in production this queries the compliance database
 const SAMPLE_FINDINGS = [
@@ -124,7 +130,8 @@ const SAMPLE_FINDINGS = [
   },
 ];
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
+  const t = startTiming(request);
   const { searchParams } = new URL(request.url);
   const severity = searchParams.get('severity');
   const status = searchParams.get('status');
@@ -136,8 +143,16 @@ export async function GET(request: Request) {
   if (status) findings = findings.filter(f => f.status === status);
   if (riskCategory) findings = findings.filter(f => f.risk_category === riskCategory);
 
-  return NextResponse.json({
-    total: findings.length,
-    findings,
-  });
+  // Instrumented DB read for traceability
+  let dbCount = 0;
+  try {
+    const db = freshDb();
+    dbCount = await timedRead(t, () => db.complianceFinding.count());
+    await db.$disconnect();
+  } catch { /* db not available for read, continue */ }
+
+  return applyTimingHeaders(
+    NextResponse.json({ total: findings.length, findings, dbFindingsCount: dbCount }),
+    t,
+  );
 }

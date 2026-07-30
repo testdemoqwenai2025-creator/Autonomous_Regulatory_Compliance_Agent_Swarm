@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { startTiming, applyTimingHeaders } from '@/lib/timing-headers';
 
 const SAMPLE_PROFILES = [
   { partner_id: 'MSCU', partner_name: 'MSC Mediterranean', edi_standard: 'EDIFACT', encrypted: true, protocol: 'TLS 1.3', last_audit: '2026-07-28T14:00:00Z', compliant: true, issues: [] },
@@ -11,8 +12,12 @@ const SAMPLE_PROFILES = [
   { partner_id: 'YANGMING', partner_name: 'Yang Ming Marine', edi_standard: 'ANSI_X12', encrypted: true, protocol: 'TLS 1.3', last_audit: '2026-07-26T08:00:00Z', compliant: true, issues: [] },
 ];
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const t = startTiming(request);
   const total = SAMPLE_PROFILES.length;
   const compliant = SAMPLE_PROFILES.filter(p => p.compliant).length;
-  return NextResponse.json({ total, compliant, non_compliant: total - compliant, profiles: SAMPLE_PROFILES });
+  return applyTimingHeaders(
+    NextResponse.json({ total, compliant, non_compliant: total - compliant, profiles: SAMPLE_PROFILES }),
+    t,
+  );
 }
