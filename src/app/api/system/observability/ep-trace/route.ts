@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
+import { parseAndValidate, epTraceSchema, ValidationError } from '@/lib/validation';
+import { logger } from '@/lib/logger';
 
 function freshDb() {
   return new PrismaClient({ log: [] });
@@ -171,7 +173,11 @@ export async function POST(request: NextRequest) {
 
   // Parse body
   let body: Record<string, unknown> = {};
-  try { body = await request.json(); } catch { /* empty */ }
+  try { body = parseAndValidate(epTraceSchema, await request.json().catch(() => ({}))); } catch (err) {
+    if (err instanceof ValidationError) {
+      return NextResponse.json({ error: err.message, details: err.details }, { status: 400 });
+    }
+  }
 
   const bodyParseMs = Math.round(performance.now() - handlerStart);
 

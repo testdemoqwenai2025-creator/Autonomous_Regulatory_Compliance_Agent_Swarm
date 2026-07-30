@@ -124,7 +124,7 @@ export async function authenticate(request: Request): Promise<AuthContext> {
     const apiKey = request.headers.get('x-api-key');
     if (apiKey) {
       const hashed = hashApiKey(apiKey);
-      const user = await db.user.findUnique({ where: { apiKeyHash: hashed } });
+      const user = await db.user.findFirst({ where: { apiKeyHash: hashed } });
       if (user) {
         await db.$disconnect();
         return {

@@ -91,5 +91,5 @@ export async function GET(request: NextRequest) {
   const total = await db.anomalyDetection.count();
   const unacked = await db.anomalyDetection.count({ where: { acknowledged: false } });
   await db.$disconnect();
-  return applyTimingHeaders(NextResponse.json({ detections, total, unacknowledged }), t);
+  return applyTimingHeaders(NextResponse.json({ detections, total, unacknowledged: unacked }), t);
 }

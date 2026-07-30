@@ -11,42 +11,37 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { startTiming, applyTimingHeaders, timedWrite, timedRead } from '@/lib/timing-headers';
 import { signJWT, generateApiKey, hashApiKey, AuthError } from '@/lib/auth';
+import { parseAndValidate, loginSchema, ValidationError } from '@/lib/validation';
 import { PrismaClient } from '@prisma/client';
+import { logger } from '@/lib/logger';
 
 function freshDb() { return new PrismaClient({ log: [] }); }
 
 export async function POST(request: NextRequest) {
   const t = startTiming(request);
   const db = freshDb();
+  const requestId = request.headers.get('x-request-id') ?? 'no-req-id';
+  const log = logger.child({ requestId, path: '/api/auth/login' });
 
   try {
-    let body: Record<string, unknown> = {};
-    try { body = await request.json(); } catch { /* empty */ }
+    const rawBody = await request.json().catch(() => ({}));
+    const body = parseAndValidate(loginSchema, rawBody);
 
-    const email = (body.email as string) ?? '';
-    const password = (body.password as string) ?? '';
     const devMode = process.env.AUTH_DEV_MODE === 'true';
-
-    if (!email) {
-      throw new AuthError('Email is required', 400);
-    }
-
     let user;
 
     if (devMode) {
-      // Dev mode: auto-create or find user
       user = await timedRead(t, () => db.user.upsert({
-        where: { email },
+        where: { email: body.email },
         update: { lastLoginAt: new Date() },
         create: {
-          email,
-          name: email.split('@')[0],
-          role: (body.role as string) ?? 'admin',
+          email: body.email,
+          name: body.email.split('@')[0],
+          role: body.role ?? 'admin',
           lastLoginAt: new Date(),
         },
       }));
 
-      // Generate API key if user doesn't have one
       if (!user.apiKeyHash) {
         const { plain, hashed } = generateApiKey();
         await timedWrite(t, () => db.user.update({
@@ -56,26 +51,26 @@ export async function POST(request: NextRequest) {
         user = { ...user, apiKey: plain };
       }
     } else {
-      // Production: validate credentials (placeholder for real auth provider)
-      user = await timedRead(t, () => db.user.findUnique({ where: { email } }));
+      user = await timedRead(t, () => db.user.findUnique({ where: { email: body.email } }));
       if (!user) {
+        log.warn('Login failed: invalid credentials', { email: body.email });
         throw new AuthError('Invalid credentials', 401);
       }
-      // In production, validate password hash here
       await timedWrite(t, () => db.user.update({
         where: { id: user!.id },
         data: { lastLoginAt: new Date() },
       }));
     }
 
-    // Generate JWT
     const jwt = signJWT({
       sub: user.id,
       email: user.email,
       role: user.role as 'viewer' | 'analyst' | 'operator' | 'admin',
     });
 
+    log.info('Login successful', { userId: user.id, email: user.email, role: user.role });
     await db.$disconnect();
+
     return applyTimingHeaders(NextResponse.json({
       status: 'authenticated',
       token: jwt,
@@ -92,6 +87,12 @@ export async function POST(request: NextRequest) {
 
   } catch (err) {
     await db.$disconnect();
+    if (err instanceof ValidationError) {
+      return applyTimingHeaders(
+        NextResponse.json({ error: err.message, details: err.details, status: 400 }, { status: 400 }),
+        t,
+      );
+    }
     const status = err instanceof AuthError ? err.statusCode : 500;
     const message = err instanceof Error ? err.message : 'Login failed';
     return applyTimingHeaders(

@@ -293,14 +293,14 @@ export default function ComplianceDashboard() {
     const fetchStartIso = new Date().toISOString();
 
     // Connection info (only available in some browsers)
-    const nav = navigator as Record<string, unknown>;
+    const nav = navigator as unknown as Record<string, unknown>;
     const connection = (nav.connection as Record<string, unknown>) ?? {};
     const connectionType = (connection.effectiveType as string) ?? 'unknown';
 
     // Try to get navigation type
     let navigationType = 'unknown';
     try {
-      const entries = performance.getEntriesByType?.('navigation') as Array<{ type: string }> | undefined;
+      const entries = performance.getEntriesByType?.('navigation') as unknown as Array<{ type: string }> | undefined;
       if (entries?.[0]) navigationType = entries[0].type;
     } catch { /* not available */ }
 
@@ -340,7 +340,7 @@ export default function ComplianceDashboard() {
       };
 
       // Merge into pingData for immediate waterfall display
-      (data as Record<string, unknown>)._clientTimingRaw = clientTimingData;
+      (data as unknown as Record<string, unknown>)._clientTimingRaw = clientTimingData;
       setPingData(data);
 
       // ── NOW re-send the client timing to a secondary endpoint for persistence ──
@@ -489,7 +489,7 @@ export default function ComplianceDashboard() {
 
   // ── Build waterfall rows from pingData ──
   const buildWaterfall = (data: PingData): WaterfallRow[] => {
-    const clientRaw = (data as Record<string, unknown>)._clientTimingRaw as Record<string, number> | undefined;
+    const clientRaw = (data as unknown as Record<string, unknown>)._clientTimingRaw as Record<string, number> | undefined;
     const client = data.client;
     const srv = data.server;
     const corr = data.correlation;
@@ -522,7 +522,7 @@ export default function ComplianceDashboard() {
 
   const pingWaterfall = pingData ? buildWaterfall(pingData) : [];
   const pingTotalMs = pingData
-    ? ((pingData as Record<string, unknown>)._clientTimingRaw as Record<string, number>)?.roundTripMs
+    ? ((pingData as unknown as Record<string, unknown>)._clientTimingRaw as Record<string, number>)?.roundTripMs
       ?? (pingData.client.roundTripMs as number) ?? pingData.correlation.serverTotalMs
     : 0;
 
@@ -686,11 +686,11 @@ export default function ComplianceDashboard() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" />Browser Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
                     <div className="flex justify-between"><span className="text-slate-500">fetch() called</span><span className="font-mono">{(pingData.client.fetchStart as string)?.slice(11,23) ?? 'n/a'}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">TTFB (first byte)</span><span className="font-mono font-bold">{pingData.client.ttfbMs ?? 0}ms</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">JSON parse</span><span className="font-mono">{pingData.client.jsonParseMs ?? 0}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">TTFB (first byte)</span><span className="font-mono font-bold">{(pingData.client.ttfbMs as number) || 0}ms</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">JSON parse</span><span className="font-mono">{(pingData.client.jsonParseMs as number) || 0}ms</span></div>
                     <div className="flex justify-between"><span className="text-slate-500">Total round-trip</span><span className="font-mono font-bold text-sky-700">{pingTotalMs}ms</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">Navigation type</span><span className="font-mono">{pingData.client.navigationType ?? 'n/a'}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">Connection</span><span className="font-mono">{pingData.client.connectionType ?? 'n/a'}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Navigation type</span><span className="font-mono">{String(pingData.client.navigationType ?? 'n/a')}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Connection</span><span className="font-mono">{String(pingData.client.connectionType ?? 'n/a')}</span></div>
                   </CardContent></Card>
 
                   <Card className="border-slate-200"><CardHeader className="pb-1"><CardTitle className="text-xs flex items-center gap-1.5"><Server className="w-3.5 h-3.5" />Server Perspective</CardTitle></CardHeader><CardContent className="text-[11px] space-y-1">
@@ -975,13 +975,12 @@ export default function ComplianceDashboard() {
                 <CardTitle className="text-sm flex items-center gap-2"><FileClock className="w-4 h-4" />Aggregated Trace Statistics <Badge variant="outline" className="text-[10px] ml-1">{traceSummary.total as number} total traces</Badge></CardTitle>
               </CardHeader><CardContent className="space-y-4">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg TTFB</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.clientTtfbMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
-                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Round-Trip</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.clientRoundTripMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
-                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Handler</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.serverHandlerMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
-                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg DB Write</p><p className="text-lg font-bold font-mono">{Math.round((traceSummary.averages as Record<string, number>)?.serverDbWriteMs ?? 0)}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg TTFB</p><p className="text-lg font-bold font-mono">{Math.round(Number((traceSummary.averages as Record<string, number>)?.clientTtfbMs) || 0)}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Round-Trip</p><p className="text-lg font-bold font-mono">{Math.round(Number((traceSummary.averages as Record<string, number>)?.clientRoundTripMs) || 0)}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg Handler</p><p className="text-lg font-bold font-mono">{Math.round(Number((traceSummary.averages as Record<string, number>)?.serverHandlerMs) || 0)}<span className="text-xs font-normal">ms</span></p></div>
+                  <div className="bg-slate-50 rounded-lg p-3 text-center"><p className="text-[10px] text-slate-500">Avg DB Write</p><p className="text-lg font-bold font-mono">{Math.round(Number((traceSummary.averages as Record<string, number>)?.serverDbWriteMs) || 0)}<span className="text-xs font-normal">ms</span></p></div>
                 </div>
-                {/* Per-path breakdown */}
-                {traceSummary.byPath && Array.isArray(traceSummary.byPath) && (traceSummary.byPath as Array<Record<string, unknown>>).length > 0 && (
+                {!!(traceSummary.byPath && Array.isArray(traceSummary.byPath) && (traceSummary.byPath as Array<Record<string, unknown>>).length > 0) && (
                   <div className="max-h-40 overflow-y-auto">
                     <Table><TableHeader><TableRow className="bg-slate-50">
                       <TableHead className="text-xs">Endpoint</TableHead>
@@ -1089,11 +1088,11 @@ export default function ComplianceDashboard() {
             {epResult && (
               <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Eye className="w-4 h-4" />Browser Environment (at trace time)</CardTitle></CardHeader><CardContent>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-                  <div><span className="text-slate-500">Memory Used</span><p className="font-semibold">{epResult.browserMetrics.memoryUsedMb} MB</p><p className="text-xs text-slate-400">of {epResult.browserMetrics.memoryLimitMb} MB limit</p></div>
-                  <div><span className="text-slate-500">DOM Nodes</span><p className="font-semibold">{epResult.browserMetrics.domNodes}</p></div>
-                  <div><span className="text-slate-500">Long Tasks</span><p className="font-semibold">{epResult.browserMetrics.longTaskCount}</p><p className="text-xs text-slate-400">{epResult.browserMetrics.longTaskTotalMs}ms total</p></div>
-                  <div><span className="text-slate-500">Resources</span><p className="font-semibold">{epResult.browserMetrics.resourceCount}</p><p className="text-xs text-slate-400">tracked by browser</p></div>
-                  <div><span className="text-slate-500">Connection</span><p className="font-semibold">{epResult.browserMetrics.roundTripAvgMs > 0 ? '' : 'N/A'}</p><p className="text-xs text-slate-400">{typeof window !== 'undefined' ? ((navigator as Record<string, unknown>).connection as Record<string, unknown>)?.effectiveType ?? 'unknown' : ''}</p></div>
+                  <div><span className="text-slate-500">Memory Used</span><p className="font-semibold">{String(epResult.browserMetrics.memoryUsedMb || 0)} MB</p><p className="text-xs text-slate-400">of {String(epResult.browserMetrics.memoryLimitMb || 0)} MB limit</p></div>
+                  <div><span className="text-slate-500">DOM Nodes</span><p className="font-semibold">{String(epResult.browserMetrics.domNodes || 0)}</p></div>
+                  <div><span className="text-slate-500">Long Tasks</span><p className="font-semibold">{String(epResult.browserMetrics.longTaskCount || 0)}</p><p className="text-xs text-slate-400">{String(epResult.browserMetrics.longTaskTotalMs || 0)}ms total</p></div>
+                  <div><span className="text-slate-500">Resources</span><p className="font-semibold">{String(epResult.browserMetrics.resourceCount || 0)}</p><p className="text-xs text-slate-400">tracked by browser</p></div>
+                  <div><span className="text-slate-500">Connection</span><p className="font-semibold">{epResult.browserMetrics.roundTripAvgMs > 0 ? '' : 'N/A'}</p><p className="text-xs text-slate-400">{typeof window !== 'undefined' ? String(((navigator as unknown as Record<string, unknown>).connection as Record<string, unknown>)?.effectiveType || 'unknown') : ''}</p></div>
                   <div><span className="text-slate-500">Trace ID</span><p className="font-mono text-xs font-semibold text-emerald-700 truncate">{epResult.traceId}</p></div>
                   <div><span className="text-slate-500">Server Timing</span><p className="font-semibold">{epResult.serverTiming.handlerMs}ms</p><p className="text-xs text-slate-400">handler | {epResult.serverTiming.dbWriteMs}ms db write</p></div>
                   <div><span className="text-slate-500">Total Traces</span><p className="font-semibold">{epResult.stats.totalEpTraces}</p><p className="text-xs text-slate-400">{epResult.stats.totalEpSpans} spans</p></div>
@@ -1169,8 +1168,8 @@ export default function ComplianceDashboard() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                   <div><span className="text-slate-500">Total Traces</span><p className="font-semibold">{epSummary.traces.total}</p></div>
                   <div><span className="text-slate-500">Total Spans</span><p className="font-semibold">{epSummary.spans.total}</p><p className="text-xs text-slate-400">{epSummary.spans.errorRate} error rate</p></div>
-                  <div><span className="text-slate-500">Avg TTFB</span><p className="font-semibold">{Math.round((epSummary.spans.aggregates._avg?.clientTtfbMs ?? 0))}ms</p></div>
-                  <div><span className="text-slate-500">Avg Round Trip</span><p className="font-semibold">{Math.round((epSummary.spans.aggregates._avg?.clientRoundTripMs ?? 0))}ms</p></div>
+                  <div><span className="text-slate-500">Avg TTFB</span><p className="font-semibold">{Math.round(((epSummary.spans.aggregates as any)?._avg?.clientTtfbMs ?? 0))}ms</p></div>
+                  <div><span className="text-slate-500">Avg Round Trip</span><p className="font-semibold">{Math.round(((epSummary.spans.aggregates as any)?._avg?.clientRoundTripMs ?? 0))}ms</p></div>
                 </div>
                 {/* Per-endpoint breakdown */}
                 {epSummary.byEndpoint.length > 0 && (

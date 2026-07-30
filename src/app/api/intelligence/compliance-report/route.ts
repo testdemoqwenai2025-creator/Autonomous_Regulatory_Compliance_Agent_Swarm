@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
         totalFindings, resolvedFindings, openFindings,
         avgMttrHours: Math.round(avgMttr * 10) / 10,
         complianceRate: Math.round(complianceRate * 10) / 10,
-        topRiskCategories: JSON.stringify(byCategory.map(c => ({ category: c.riskCategory, count: c._count.id }))),
+        topRiskCategories: JSON.stringify(byCategory.map(c => ({ category: c.riskCategory, count: c._count }))),
         anomaliesInPeriod: anomalies,
       },
     }));
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
     return applyTimingHeaders(NextResponse.json({
       report: { id: report.id, type: reportType, period: { start: start.toISOString(), end: end.toISOString() } },
       summary: { totalFindings, openFindings, resolvedFindings, criticalOpen, avgMttrHours: Math.round(avgMttr * 10) / 10, complianceRate: Math.round(complianceRate * 10) / 10, anomaliesInPeriod: anomalies },
-      topRiskCategories: byCategory.map(c => ({ category: c.riskCategory, count: c._count.id })),
+      topRiskCategories: byCategory.map(c => ({ category: c.riskCategory, count: c._count })),
     }), t);
 
   } catch (err) {

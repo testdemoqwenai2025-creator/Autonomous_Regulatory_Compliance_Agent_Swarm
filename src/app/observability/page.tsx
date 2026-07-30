@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   Thermometer, GanttChart, Gauge, Activity, Database, Layers, Monitor,
   Zap, Eye, History, BarChart3, Server, Flame,
-  Key, Settings, Heart, Check, Cpu, HardDrive,
+  Key, Settings, Heart, Check, Cpu, HardDrive, Clock,
   RefreshCw, Loader2,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -123,7 +123,7 @@ export default function ObservabilityPage() {
 
         <div className="grid grid-cols-2 gap-3">
           <Card><CardContent className="p-3"><div className="flex items-center gap-2"><Heart className={`w-4 h-4 ${healthLive ? 'text-emerald-500' : 'text-slate-300'}`} /><span className="text-sm font-medium">Liveness</span>{healthLive && <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-300 ml-auto">{String(healthLive.status)}</Badge>}</div></CardContent></Card>
-          <Card><CardContent className="p-3"><div className="flex items-center gap-2"><Activity className={`w-4 h-4 ${healthReady?.status === 'ready' ? 'text-emerald-500' : 'text-amber-500'}`} /><span className="text-sm font-medium">Readiness</span>{healthReady && <Badge variant="outline" className={`text-[10px] ml-auto ${healthReady.status === 'ready' ? 'text-emerald-600 border-emerald-300' : 'text-amber-600 border-amber-300'}`}>{String(healthReady.status)}</Badge>}{healthReady?.checks && Array.isArray(healthReady.checks) && <span className="text-[10px] text-slate-400 ml-2">{healthReady.checks.filter((c: {name: string; status: string}) => c.status === 'healthy').length}/{healthReady.checks.length} checks</span>}</div></CardContent></Card>
+          <Card><CardContent className="p-3"><div className="flex items-center gap-2"><Activity className={`w-4 h-4 ${healthReady?.status === 'ready' ? 'text-emerald-500' : 'text-amber-500'}`} /><span className="text-sm font-medium">Readiness</span>{healthReady && <Badge variant="outline" className={`text-[10px] ml-auto ${(healthReady as any).status === 'ready' ? 'text-emerald-600 border-emerald-300' : 'text-amber-600 border-amber-300'}`}>{String((healthReady as any).status)}</Badge>}{(healthReady as any)?.checks && Array.isArray((healthReady as any).checks) && <span className="text-[10px] text-slate-400 ml-2">{(healthReady as any).checks.filter((c: {name: string; status: string}) => c.status === 'healthy').length}/{(healthReady as any).checks.length} checks</span>}</div></CardContent></Card>
         </div>
 
         {epResult && (
@@ -226,8 +226,8 @@ export default function ObservabilityPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                   <div><span className="text-slate-500">Total Traces</span><p className="font-bold">{epSummary.traces.total}</p></div>
                   <div><span className="text-slate-500">Total Spans</span><p className="font-bold">{epSummary.spans.total}</p><p className="text-xs text-slate-400">{epSummary.spans.errorRate} error rate</p></div>
-                  <div><span className="text-slate-500">Avg TTFB</span><p className="font-bold">{Math.round((epSummary.spans.aggregates._avg?.clientTtfbMs ?? 0))}ms</p></div>
-                  <div><span className="text-slate-500">Avg Round Trip</span><p className="font-bold">{Math.round((epSummary.spans.aggregates._avg?.clientRoundTripMs ?? 0))}ms</p></div>
+                  <div><span className="text-slate-500">Avg TTFB</span><p className="font-bold">{Math.round(((epSummary.spans.aggregates as any)?._avg?.clientTtfbMs ?? 0))}ms</p></div>
+                  <div><span className="text-slate-500">Avg Round Trip</span><p className="font-bold">{Math.round(((epSummary.spans.aggregates as any)?._avg?.clientRoundTripMs ?? 0))}ms</p></div>
                 </div>
               </CardContent></Card>
             )}

@@ -39,6 +39,9 @@ export interface SpanInput {
   serverDbWriteMs: number;
   serverDbReadMs: number;
   error?: string;
+  rateLimitLimit?: number;
+  rateLimitRemaining?: number;
+  authMethod?: string;
 }
 
 export interface BrowserMetrics {
