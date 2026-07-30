@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   Shield, ShieldAlert, ShieldCheck, Clock, Activity,
   FileKey, FileSearch, Wrench, Timer, AlertTriangle,
@@ -9,6 +9,7 @@ import {
   Globe, ArrowRight, Zap, Layers, Monitor,
   Send, CircuitBoard, Wifi, Check, Fingerprint,
   ArrowDownLeft, Network, Eye, History, BarChart3,
+  MousePointerClick, Radio, FileClock, Flame,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +22,7 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
+import { useRequestTracer, ObservedResource } from '@/hooks/useRequestTracer';
 
 // ═══════════════════════════════════════════════════════════════════
 //  TYPES
@@ -78,7 +80,30 @@ interface StoredTrace {
   serverHandlerStartTs: string; serverHandlerEndTs: string; serverHandlerMs: number;
   serverDbWriteMs: number; serverDbReadMs: number;
   clientServerDeltaMs: number; totalEndToEndMs: number;
+  clientTimingJson: string;
   createdAt: string;
+}
+
+interface CorrelatedTraceResult {
+  status: string; message: string; traceId: string; requestId: string;
+  client: {
+    fetchStart: string; ttfbMs: number; roundTripMs: number; jsonParseMs: number;
+    renderStartMs: number; networkProtocol: string; navigationType: string;
+    connectionType: string; source: string; component: string;
+    resourceTiming?: { dnsMs: number; tcpMs: number; sslMs: number; requestMs: number; responseMs: number; transferSize: number; encodedBodySize: number; decodedBodySize: number };
+    observedResources: number;
+  };
+  server: {
+    middleware: { status: string; startTs: string; endTs: string; durationMs: number; requestId: string; clientIp: string; headersInjected: string[] };
+    handler: { status: string; endpoint: string; method: string; startTs: string; endTs: string; durationMs: number; bodyParseMs: number };
+    database: { status: string; engine: string; writeMs: number; readMs: number; recordsWritten: number; recordsRead: number };
+  };
+  correlation: {
+    clockDeltaMs: number; totalEndToEndMs: number; serverTotalMs: number;
+    browserOverheadMs: number | null; networkTransitMs: number | null;
+    tracePersisted: boolean;
+  };
+  stats: { totalTrackedEvents: number; totalHealthChecks: number; totalCorrelatedTraces: number };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -191,6 +216,19 @@ export default function ComplianceDashboard() {
   const [traceHistory, setTraceHistory] = useState<StoredTrace[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const renderStartRef = useRef<number>(0);
+
+  // ── Frontend Trace state (new) ──
+  const {
+    observedResources, stats: tracerStats,
+    traceAndPersist, getResourceTiming,
+  } = useRequestTracer();
+  const [correlatedResult, setCorrelatedResult] = useState<CorrelatedTraceResult | null>(null);
+  const [correlatedLoading, setCorrelatedLoading] = useState(false);
+  const [correlatedError, setCorrelatedError] = useState<string | null>(null);
+  const [traceSummary, setTraceSummary] = useState<Record<string, unknown> | null>(null);
+  const [traceSummaryLoading, setTraceSummaryLoading] = useState(false);
+  const [fullTraceHistory, setFullTraceHistory] = useState<StoredTrace[]>([]);
+  const [fullHistoryLoading, setFullHistoryLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
