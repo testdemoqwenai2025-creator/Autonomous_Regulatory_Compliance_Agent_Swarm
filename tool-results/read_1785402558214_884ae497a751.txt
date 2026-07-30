@@ -1,0 +1,455 @@
+     1→   400→            <TabsTrigger value="pipeline" className="text-xs sm:text-sm">Pipeline</TabsTrigger>
+     2→   401→            <TabsTrigger value="findings" className="text-xs sm:text-sm">Findings</TabsTrigger>
+     3→   402→            <TabsTrigger value="mttr" className="text-xs sm:text-sm">MTTR</TabsTrigger>
+     4→   403→            <TabsTrigger value="profiles" className="text-xs sm:text-sm">EDI Profiles</TabsTrigger>
+     5→   404→            <TabsTrigger value="policies" className="text-xs sm:text-sm">Policies</TabsTrigger>
+     6→   405→            <TabsTrigger value="endpoints" className="text-xs sm:text-sm">API</TabsTrigger>
+     7→   406→          </TabsList>
+     8→   407→
+     9→   408→          {/* ═══════════════════════ PIPELINE TAB ═══════════════════════ */}
+    10→   409→          <TabsContent value="pipeline" className="space-y-4">
+    11→   410→            {/* Hero: flow diagram */}
+    12→   411→            <Card>
+    13→   412→              <CardHeader className="pb-3">
+    14→   413→                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    15→   414→                  <div>
+    16→   415→                    <CardTitle className="text-base flex items-center gap-2">
+    17→   416→                      <CircuitBoard className="w-4 h-4" />
+    18→   417→                      Endpoint Communication Pipeline
+    19→   418→                    </CardTitle>
+    20→   419→                    <CardDescription>Real-time proof: Browser → Middleware → API Handler → Database → Response</CardDescription>
+    21→   420→                  </div>
+    22→   421→                  <div className="flex gap-2">
+    23→   422→                    <Button size="sm" onClick={runPing} disabled={pingLoading}>
+    24→   423→                      {pingLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1.5 h-3.5 w-3.5" />}
+    25→   424→                      Send GET /api/system/ping
+    26→   425→                    </Button>
+    27→   426→                  </div>
+    28→   427→                </div>
+    29→   428→              </CardHeader>
+    30→   429→              <CardContent className="space-y-6">
+    31→   430→                {/* Flow Diagram */}
+    32→   431→                <div className="flex flex-wrap items-start justify-center gap-2 sm:gap-4">
+    33→   432→                  <PipelineNode
+    34→   433→                    icon={Globe}
+    35→   434→                    label="Browser"
+    36→   435→                    status={pingData?.trace.browser.status ?? 'idle'}
+    37→   436→                    detail={pingData?.trace.browser.note ?? 'Click button to send request'}
+    38→   437→                    borderColor={pingData ? 'border-emerald-400' : 'border-slate-200'}
+    39→   438→                    bg={pingData ? 'bg-emerald-50' : 'bg-white'}
+    40→   439→                  />
+    41→   440→                  <FlowArrow />
+    42→   441→                  <PipelineNode
+    43→   442→                    icon={Layers}
+    44→   443→                    label="Middleware"
+    45→   444→                    status={pingData?.trace.middleware.status ?? 'idle'}
+    46→   445→                    detail={pingData ? `ID: ...${pingData.trace.middleware.requestId.slice(-8)}` : 'Waiting for request'}
+    47→   446→                    borderColor={pingData?.trace.middleware.status === 'intercepted' ? 'border-emerald-400' : 'border-slate-200'}
+    48→   447→                    bg={pingData?.trace.middleware.status === 'intercepted' ? 'bg-emerald-50' : 'bg-white'}
+    49→   448→                    latency={pingData?.timing.middlewareOverheadMs ? `${pingData.timing.middlewareOverheadMs}ms` : undefined}
+    50→   449→                  />
+    51→   450→                  <FlowArrow />
+    52→   451→                  <PipelineNode
+    53→   452→                    icon={Server}
+    54→   453→                    label="API Handler"
+    55→   454→                    status={pingData?.trace.api_handler.status ?? 'idle'}
+    56→   455→                    detail={pingData?.trace.api_handler.endpoint ?? '/api/system/ping'}
+    57→   456→                    borderColor={pingData?.trace.api_handler.status === 'processed' ? 'border-emerald-400' : 'border-slate-200'}
+    58→   457→                    bg={pingData?.trace.api_handler.status === 'processed' ? 'bg-emerald-50' : 'bg-white'}
+    59→   458→                    latency={pingData?.timing.totalHandlerMs ? `${pingData.timing.totalHandlerMs}ms` : undefined}
+    60→   459→                  />
+    61→   460→                  <FlowArrow />
+    62→   461→                  <PipelineNode
+    63→   462→                    icon={Database}
+    64→   463→                    label="Database"
+    65→   464→                    status={pingData?.trace.database.status ?? 'idle'}
+    66→   465→                    detail={pingData?.trace.database.engine ?? 'SQLite + Prisma'}
+    67→   466→                    borderColor={pingData?.trace.database.status === 'read_write_verified' ? 'border-emerald-400' : 'border-slate-200'}
+    68→   467→                    bg={pingData?.trace.database.status === 'read_write_verified' ? 'bg-emerald-50' : 'bg-white'}
+    69→   468→                    latency={pingData ? `W:${pingData.timing.dbWriteMs}ms R:${pingData.timing.dbReadMs}ms` : undefined}
+    70→   469→                  />
+    71→   470→                  <FlowArrow />
+    72→   471→                  <PipelineNode
+    73→   472→                    icon={Monitor}
+    74→   473→                    label="Response"
+    75→   474→                    status={pingData ? 'delivered' : 'idle'}
+    76→   475→                    detail={pingData?.message?.slice(0, 40) ?? 'Awaiting response'}
+    77→   476→                    borderColor={pingData ? 'border-emerald-400' : 'border-slate-200'}
+    78→   477→                    bg={pingData ? 'bg-emerald-50' : 'bg-white'}
+    79→   478→                  />
+    80→   479→                </div>
+    81→   480→
+    82→   481→                {pingError && (
+    83→   482→                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+    84→   483→                    <AlertTriangle className="w-4 h-4 inline mr-2" />
+    85→   484→                    {pingError}
+    86→   485→                  </div>
+    87→   486→                )}
+    88→   487→              </CardContent>
+    89→   488→            </Card>
+    90→   489→
+    91→   490→            {/* Detail panels: shown after ping */}
+    92→   491→            {pingData && (
+    93→   492→              <div className="grid gap-4 lg:grid-cols-2">
+    94→   493→                {/* Middleware Detail */}
+    95→   494→                <Card>
+    96→   495→                  <CardHeader className="pb-2">
+    97→   496→                    <CardTitle className="text-sm flex items-center gap-2"><Layers className="w-4 h-4" /> Middleware Detail</CardTitle>
+    98→   497→                  </CardHeader>
+    99→   498→                  <CardContent className="space-y-2 text-xs">
+   100→   499→                    <div className="flex justify-between"><span className="text-slate-500">Request ID</span><span className="font-mono text-slate-800">{pingData.trace.middleware.requestId}</span></div>
+   101→   500→                    <div className="flex justify-between"><span className="text-slate-500">Intercepted</span><Badge variant="outline" className="text-[10px]">{pingData.trace.middleware.timestamp}</Badge></div>
+   102→   501→                    <div className="flex justify-between"><span className="text-slate-500">Client IP</span><span className="font-mono text-slate-800">{pingData.trace.middleware.clientIp}</span></div>
+   103→   502→                    <div className="flex justify-between"><span className="text-slate-500">User-Agent</span><span className="font-mono text-slate-800 max-w-[200px] truncate" title={pingData.trace.middleware.userAgent}>{pingData.trace.middleware.userAgent.slice(0, 60)}...</span></div>
+   104→   503→                    <Separator className="my-2" />
+   105→   504→                    <p className="text-slate-500">Headers injected by middleware:</p>
+   106→   505→                    <div className="flex flex-wrap gap-1">
+   107→   506→                      {pingData.trace.middleware.headersInjected.map(h => (
+   108→   507→                        <Badge key={h} variant="outline" className="text-[10px] font-mono border-slate-300">{h}</Badge>
+   109→   508→                      ))}
+   110→   509→                    </div>
+   111→   510→                    <Separator className="my-2" />
+   112→   511→                    <p className="text-slate-500">Response headers (visible in browser):</p>
+   113→   512→                    <div className="flex flex-wrap gap-1">
+   114→   513→                      {Object.entries(responseHeaders).filter(([k]) => k.startsWith('x-')).map(([k, v]) => (
+   115→   514→                        <Badge key={k} variant="outline" className="text-[10px] font-mono border-slate-300">{k}: {typeof v === 'string' ? v.slice(0, 20) : v}</Badge>
+   116→   515→                      ))}
+   117→   516→                    </div>
+   118→   517→                  </CardContent>
+   119→   518→                </Card>
+   120→   519→
+   121→   520→                {/* Database Detail */}
+   122→   521→                <Card>
+   123→   522→                  <CardHeader className="pb-2">
+   124→   523→                    <CardTitle className="text-sm flex items-center gap-2"><Database className="w-4 h-4" /> Database Detail</CardTitle>
+   125→   524→                  </CardHeader>
+   126→   525→                  <CardContent className="space-y-2 text-xs">
+   127→   526→                    <div className="flex justify-between"><span className="text-slate-500">Engine</span><span className="font-mono text-slate-800">{pingData.trace.database.engine}</span></div>
+   128→   527→                    <div className="flex justify-between"><span className="text-slate-500">Records Written</span><span className="font-mono text-emerald-700 font-bold">{pingData.trace.database.recordsWritten}</span></div>
+   129→   528→                    <div className="flex justify-between"><span className="text-slate-500">Records Read</span><span className="font-mono text-emerald-700 font-bold">{pingData.trace.database.recordsRead}</span></div>
+   130→   529→                    <Separator className="my-2" />
+   131→   530→                    <div className="grid grid-cols-2 gap-2">
+   132→   531→                      <div className="bg-slate-50 rounded-lg p-2"><p className="text-slate-500">DB Write</p><p className="text-lg font-bold font-mono text-slate-800">{pingData.timing.dbWriteMs}<span className="text-xs font-normal">ms</span></p></div>
+   133→   532→                      <div className="bg-slate-50 rounded-lg p-2"><p className="text-slate-500">DB Read</p><p className="text-lg font-bold font-mono text-slate-800">{pingData.timing.dbReadMs}<span className="text-xs font-normal">ms</span></p></div>
+   134→   533→                      <div className="bg-slate-50 rounded-lg p-2"><p className="text-slate-500">Middleware</p><p className="text-lg font-bold font-mono text-slate-800">{pingData.timing.middlewareOverheadMs ?? '-'}<span className="text-xs font-normal">ms</span></p></div>
+   135→   534→                      <div className="bg-slate-50 rounded-lg p-2"><p className="text-slate-500">Total Handler</p><p className="text-lg font-bold font-mono text-slate-800">{pingData.timing.totalHandlerMs}<span className="text-xs font-normal">ms</span></p></div>
+   136→   535→                    </div>
+   137→   536→                    <Separator className="my-2" />
+   138→   537→                    <p className="text-slate-500">Tracked Events: <span className="font-bold text-slate-800">{pingData.stats.totalTrackedEvents}</span> | Health Checks: <span className="font-bold text-slate-800">{pingData.stats.totalHealthChecks}</span></p>
+   139→   538→                  </CardContent>
+   140→   539→                </Card>
+   141→   540→
+   142→   541→                {/* POST Test */}
+   143→   542→                <Card>
+   144→   543→                  <CardHeader className="pb-2">
+   145→   544→                    <CardTitle className="text-sm flex items-center gap-2"><Send className="w-4 h-4" /> POST Test (Browser → Middleware → API → DB Write)</CardTitle>
+   146→   545→                    <CardDescription>Send a custom payload through the full pipeline. The event is persisted in the database.</CardDescription>
+   147→   546→                  </CardHeader>
+   148→   547→                  <CardContent className="space-y-3">
+   149→   548→                    <div className="flex gap-2">
+   150→   549→                      <Input
+   151→   550→                        placeholder='{"message": "hello", "from": "browser"}'
+   152→   551→                        value={postPayload}
+   153→   552→                        onChange={e => setPostPayload(e.target.value)}
+   154→   553→                        className="font-mono text-xs"
+   155→   554→                      />
+   156→   555→                      <Button size="sm" onClick={runPostPing} disabled={pingLoading}>
+   157→   556→                        <Send className="mr-1.5 h-3.5 w-3.5" /> POST
+   158→   557→                      </Button>
+   159→   558→                    </div>
+   160→   559→                    {postResult && (
+   161→   560→                      <pre className="bg-slate-900 text-emerald-400 rounded-lg p-3 text-[11px] font-mono overflow-x-auto max-h-48 overflow-y-auto">
+   162→   561→                        {postResult}
+   163→   562→                      </pre>
+   164→   563→                    )}
+   165→   564→                  </CardContent>
+   166→   565→                </Card>
+   167→   566→
+   168→   567→                {/* Recent Events */}
+   169→   568→                <Card>
+   170→   569→                  <CardHeader className="pb-2">
+   171→   570→                    <CardTitle className="text-sm flex items-center gap-2"><Activity className="w-4 h-4" /> Recent DB Events (proves persistence)</CardTitle>
+   172→   571→                    <CardDescription>These are real records read from SQLite, written by previous GET/POST calls.</CardDescription>
+   173→   572→                  </CardHeader>
+   174→   573→                  <CardContent>
+   175→   574→                    <div className="max-h-64 overflow-y-auto">
+   176→   575→                      <Table>
+   177→   576→                        <TableHeader>
+   178→   577→                          <TableRow className="bg-slate-50">
+   179→   578→                            <TableHead className="text-xs">Event ID</TableHead>
+   180→   579→                            <TableHead className="text-xs">Path</TableHead>
+   181→   580→                            <TableHead className="text-xs">Method</TableHead>
+   182→   581→                            <TableHead className="text-xs">Status</TableHead>
+   183→   582→                            <TableHead className="text-xs">DB Read</TableHead>
+   184→   583→                            <TableHead className="text-xs">Created</TableHead>
+   185→   584→                          </TableRow>
+   186→   585→                        </TableHeader>
+   187→   586→                        <TableBody>
+   188→   587→                          {pingData.stats.recentEvents.map(ev => (
+   189→   588→                            <TableRow key={ev.id} className="hover:bg-slate-50/50">
+   190→   589→                              <TableCell className="font-mono text-[11px]">...{ev.id}</TableCell>
+   191→   590→                              <TableCell className="font-mono text-[11px]">{ev.path}</TableCell>
+   192→   591→                              <TableCell><Badge variant="outline" className={`text-[10px] ${ev.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-amber-700 border-amber-300'}`}>{ev.method}</Badge></TableCell>
+   193→   592→                              <TableCell className="text-[11px]">{ev.statusCode}</TableCell>
+   194→   593→                              <TableCell className="font-mono text-[11px]">{ev.dbReadMs != null ? `${ev.dbReadMs}ms` : '-'}</TableCell>
+   195→   594→                              <TableCell className="text-[11px] text-slate-500">{ev.createdAt.slice(11, 19)}</TableCell>
+   196→   595→                            </TableRow>
+   197→   596→                          ))}
+   198→   597→                        </TableBody>
+   199→   598→                      </Table>
+   200→   599→                    </div>
+   201→   600→                  </CardContent>
+   202→   601→                </Card>
+   203→   602→              </div>
+   204→   603→            )}
+   205→   604→          </TabsContent>
+   206→   605→
+   207→   606→          {/* ─── Findings Tab ─── */}
+   208→   607→          <TabsContent value="findings">
+   209→   608→            <Card>
+   210→   609→              <CardHeader className="pb-3">
+   211→   610→                <div className="flex items-center justify-between">
+   212→   611→                  <div>
+   213→   612→                    <CardTitle className="text-base">Audit Findings</CardTitle>
+   214→   613→                    <CardDescription>{findings.length} findings from 11 compliance queries</CardDescription>
+   215→   614→                  </div>
+   216→   615→                  <div className="flex gap-2">
+   217→   616→                    <Badge variant="outline" className="text-xs">Critical: {findings.filter(f => f.severity === 'critical').length}</Badge>
+   218→   617→                    <Badge variant="outline" className="text-xs">High: {findings.filter(f => f.severity === 'high').length}</Badge>
+   219→   618→                  </div>
+   220→   619→                </div>
+   221→   620→              </CardHeader>
+   222→   621→              <CardContent className="p-0">
+   223→   622→                <div className="overflow-x-auto">
+   224→   623→                  <Table>
+   225→   624→                    <TableHeader>
+   226→   625→                      <TableRow className="bg-slate-50">
+   227→   626→                        <TableHead className="w-[180px]">Ref</TableHead>
+   228→   627→                        <TableHead className="w-[80px]">Severity</TableHead>
+   229→   628→                        <TableHead className="w-[100px]">Status</TableHead>
+   230→   629→                        <TableHead className="w-[100px]">Risk</TableHead>
+   231→   630→                        <TableHead>Title</TableHead>
+   232→   631→                        <TableHead className="w-[60px] text-right">Rows</TableHead>
+   233→   632→                        <TableHead className="w-[80px] text-right">MTTR</TableHead>
+   234→   633→                      </TableRow>
+   235→   634→                    </TableHeader>
+   236→   635→                    <TableBody>
+   237→   636→                      {findings.map(f => (
+   238→   637→                        <TableRow key={f.finding_ref} className="hover:bg-slate-50/50">
+   239→   638→                          <TableCell className="font-mono text-xs">{f.finding_ref.slice(-12)}</TableCell>
+   240→   639→                          <TableCell>
+   241→   640→                            <Badge variant="outline" className={`text-xs ${severityColor(f.severity)}`}>{f.severity}</Badge>
+   242→   641→                          </TableCell>
+   243→   642→                          <TableCell>
+   244→   643→                            <div className="flex items-center gap-1.5">
+   245→   644→                              {statusIcon(f.status)}
+   246→   645→                              <span className="text-xs capitalize">{f.status.replace('_', ' ')}</span>
+   247→   646→                            </div>
+   248→   647→                          </TableCell>
+   249→   648→                          <TableCell className="text-xs text-slate-600 max-w-[100px] truncate">{categoryLabel(f.risk_category)}</TableCell>
+   250→   649→                          <TableCell className="text-sm max-w-[300px] truncate">{f.title}</TableCell>
+   251→   650→                          <TableCell className="text-right text-xs font-mono">{f.affected_row_count}</TableCell>
+   252→   651→                          <TableCell className="text-right text-xs font-mono">{f.mttr_hours ? `${f.mttr_hours}h` : '-'}</TableCell>
+   253→   652→                        </TableRow>
+   254→   653→                      ))}
+   255→   654→                    </TableBody>
+   256→   655→                  </Table>
+   257→   656→                </div>
+   258→   657→              </CardContent>
+   259→   658→            </Card>
+   260→   659→          </TabsContent>
+   261→   660→
+   262→   661→          {/* ─── MTTR Tab ─── */}
+   263→   662→          <TabsContent value="mttr">
+   264→   663→            <div className="grid gap-4 lg:grid-cols-2">
+   265→   664→              <Card>
+   266→   665→                <CardHeader className="pb-3">
+   267→   666→                  <CardTitle className="text-base flex items-center gap-2"><TrendingDown className="w-4 h-4" /> MTTR by Risk Category</CardTitle>
+   268→   667→                  <CardDescription>Mean time to resolution in hours</CardDescription>
+   269→   668→                </CardHeader>
+   270→   669→                <CardContent className="space-y-3">
+   271→   670→                  {mttr?.report.risk_categories.map(cat => {
+   272→   671→                    const pct = cat.total > 0 ? (cat.resolved / cat.total) * 100 : 0;
+   273→   672→                    return (
+   274→   673→                      <div key={cat.category} className="space-y-1">
+   275→   674→                        <div className="flex items-center justify-between text-sm">
+   276→   675→                          <span className="text-slate-700 font-medium">{categoryLabel(cat.category)}</span>
+   277→   676→                          <span className="text-xs text-slate-500">{cat.resolved}/{cat.total} resolved</span>
+   278→   677→                        </div>
+   279→   678→                        <div className="flex items-center gap-3">
+   280→   679→                          <Progress value={pct} className="h-2 flex-1" />
+   281→   680→                          <span className="text-xs font-mono text-slate-600 w-16 text-right">{cat.avg_mttr_hours}h avg</span>
+   282→   681→                        </div>
+   283→   682→                      </div>
+   284→   683→                    );
+   285→   684→                  })}
+   286→   685→                </CardContent>
+   287→   686→              </Card>
+   288→   687→
+   289→   688→              <Card>
+   290→   689→                <CardHeader className="pb-3">
+   291→   690→                  <CardTitle className="text-base flex items-center gap-2"><Activity className="w-4 h-4" /> 7-Day Trend</CardTitle>
+   292→   691→                  <CardDescription>Daily MTTR and finding velocity</CardDescription>
+   293→   692→                </CardHeader>
+   294→   693→                <CardContent className="space-y-2">
+   295→   694→                  {mttr?.trend.map(day => (
+   296→   695→                    <div key={day.date} className="flex items-center gap-3 text-sm">
+   297→   696→                      <span className="text-xs font-mono text-slate-500 w-20">{day.date.slice(5)}</span>
+   298→   697→                      <div className="flex-1 flex items-center gap-2">
+   299→   698→                        <div className="flex-1 bg-slate-100 rounded-full h-2 relative overflow-hidden">
+   300→   699→                          <div className="bg-slate-600 h-full rounded-full" style={{ width: `${(day.avg_mttr / 30) * 100}%` }} />
+   301→   700→                        </div>
+   302→   701→                        <span className="text-xs font-mono w-10 text-right">{day.avg_mttr}h</span>
+   303→   702→                      </div>
+   304→   703→                      <div className="flex items-center gap-1 text-xs text-slate-500 w-20">
+   305→   704→                        <span className="text-amber-600">+{day.new_findings}</span>
+   306→   705→                        <span>/</span>
+   307→   706→                        <span className="text-emerald-600">-{day.resolved}</span>
+   308→   707→                      </div>
+   309→   708→                    </div>
+   310→   709→                  ))}
+   311→   710→                </CardContent>
+   312→   711→              </Card>
+   313→   712→            </div>
+   314→   713→          </TabsContent>
+   315→   714→
+   316→   715→          {/* ─── EDI Profiles Tab ─── */}
+   317→   716→          <TabsContent value="profiles">
+   318→   717→            <Card>
+   319→   718→              <CardHeader className="pb-3">
+   320→   719→                <div className="flex items-center justify-between">
+   321→   720→                  <div>
+   322→   721→                    <CardTitle className="text-base">EDI Connection Profiles</CardTitle>
+   323→   722→                    <CardDescription>{profiles.filter(p => p.compliant).length}/{profiles.length} partners compliant</CardDescription>
+   324→   723→                  </div>
+   325→   724→                </div>
+   326→   725→              </CardHeader>
+   327→   726→              <CardContent className="p-0">
+   328→   727→                <Table>
+   329→   728→                  <TableHeader>
+   330→   729→                    <TableRow className="bg-slate-50">
+   331→   730→                      <TableHead>Partner</TableHead>
+   332→   731→                      <TableHead>Standard</TableHead>
+   333→   732→                      <TableHead>Encryption</TableHead>
+   334→   733→                      <TableHead>Protocol</TableHead>
+   335→   734→                      <TableHead>Status</TableHead>
+   336→   735→                      <TableHead>Issues</TableHead>
+   337→   736→                    </TableRow>
+   338→   737→                  </TableHeader>
+   339→   738→                  <TableBody>
+   340→   739→                    {profiles.map(p => (
+   341→   740→                      <TableRow key={p.partner_id} className="hover:bg-slate-50/50">
+   342→   741→                        <TableCell className="font-medium">{p.partner_name}</TableCell>
+   343→   742→                        <TableCell><Badge variant="outline" className="text-xs font-mono">{p.edi_standard}</Badge></TableCell>
+   344→   743→                        <TableCell>
+   345→   744→                          {p.encrypted ? <Lock className="w-4 h-4 text-emerald-600" /> : <Unlock className="w-4 h-4 text-red-500" />}
+   346→   745→                        </TableCell>
+   347→   746→                        <TableCell className="text-xs font-mono">{p.protocol}</TableCell>
+   348→   747→                        <TableCell>
+   349→   748→                          <Badge className={`text-xs ${p.compliant ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+   350→   749→                            {p.compliant ? 'Compliant' : 'Non-Compliant'}
+   351→   750→                          </Badge>
+   352→   751→                        </TableCell>
+   353→   752→                        <TableCell className="text-xs text-red-600">{p.issues.join('; ') || '-'}</TableCell>
+   354→   753→                      </TableRow>
+   355→   754→                    ))}
+   356→   755→                  </TableBody>
+   357→   756→                </Table>
+   358→   757→              </CardContent>
+   359→   758→            </Card>
+   360→   759→          </TabsContent>
+   361→   760→
+   362→   761→          {/* ─── Policies Tab ─── */}
+   363→   762→          <TabsContent value="policies">
+   364→   763→            <Card>
+   365→   764→              <CardHeader className="pb-3">
+   366→   765→                <div className="flex items-center justify-between">
+   367→   766→                  <div>
+   368→   767→                    <CardTitle className="text-base">Masking Policies</CardTitle>
+   369→   768→                    <CardDescription>{policies.filter(p => p.enabled).length} active / {policies.filter(p => p.auto_generated).length} auto-generated</CardDescription>
+   370→   769→                  </div>
+   371→   770→                  <Button size="sm" variant="outline" onClick={async () => {
+   372→   771→                    await fetch('/api/compliance/remediate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'dry-run' }) });
+   373→   772→                    await fetchData();
+   374→   773→                  }}>
+   375→   774→                    <Wrench className="mr-1.5 h-3.5 w-3.5" /> Generate Policies
+   376→   775→                  </Button>
+   377→   776→                </div>
+   378→   777→              </CardHeader>
+   379→   778→              <CardContent className="p-0">
+   380→   779→                <Table>
+   381→   780→                  <TableHeader>
+   382→   781→                    <TableRow className="bg-slate-50">
+   383→   782→                      <TableHead>Policy Name</TableHead>
+   384→   783→                      <TableHead>Field</TableHead>
+   385→   784→                      <TableHead>Action</TableHead>
+   386→   785→                      <TableHead>GDPR</TableHead>
+   387→   786→                      <TableHead>Enabled</TableHead>
+   388→   787→                      <TableHead>Source</TableHead>
+   389→   788→                    </TableRow>
+   390→   789→                  </TableHeader>
+   391→   790→                  <TableBody>
+   392→   791→                    {policies.map(p => (
+   393→   792→                      <TableRow key={p.id} className="hover:bg-slate-50/50">
+   394→   793→                        <TableCell className="font-mono text-xs">{p.name}</TableCell>
+   395→   794→                        <TableCell className="text-xs font-mono">{p.field_name}</TableCell>
+   396→   795→                        <TableCell><Badge variant="outline" className="text-xs">{p.action}</Badge></TableCell>
+   397→   796→                        <TableCell className="text-xs">{p.gdpr_article}</TableCell>
+   398→   797→                        <TableCell>
+   399→   798→                          <Badge className={`text-xs ${p.enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}`}>
+   400→   799→                            {p.enabled ? 'Active' : 'Staged'}
+   401→   800→                          </Badge>
+   402→   801→                        </TableCell>
+   403→   802→                        <TableCell>
+   404→   803→                          {p.auto_generated ? <Badge variant="outline" className="text-xs">Auto</Badge> : <Badge variant="outline" className="text-xs">Manual</Badge>}
+   405→   804→                        </TableCell>
+   406→   805→                      </TableRow>
+   407→   806→                    ))}
+   408→   807→                  </TableBody>
+   409→   808→                </Table>
+   410→   809→              </CardContent>
+   411→   810→            </Card>
+   412→   811→          </TabsContent>
+   413→   812→
+   414→   813→          {/* ─── API Endpoints Tab ─── */}
+   415→   814→          <TabsContent value="endpoints">
+   416→   815→            <Card>
+   417→   816→              <CardHeader className="pb-3">
+   418→   817→                <CardTitle className="text-base">API Endpoints</CardTitle>
+   419→   818→                <CardDescription>All compliance swarm endpoints available to the frontend</CardDescription>
+   420→   819→              </CardHeader>
+   421→   820→              <CardContent className="space-y-2">
+   422→   821→                {[
+   423→   822→                  { method: 'GET', path: '/api/system/ping', desc: '[LIVE] Full-stack pipeline health — proves browser/middleware/API/DB communication' },
+   424→   823→                  { method: 'POST', path: '/api/system/ping', desc: '[LIVE] Write a custom event through the full pipeline to the database' },
+   425→   824→                  { method: 'GET', path: '/api/compliance/health', desc: 'Health check + tool status' },
+   426→   825→                  { method: 'GET', path: '/api/compliance/findings', desc: 'List audit findings (filter: severity, status, risk_category)' },
+   427→   826→                  { method: 'GET', path: '/api/compliance/mttr', desc: 'MTTR report by risk category + 7-day trend' },
+   428→   827→                  { method: 'GET', path: '/api/compliance/policies', desc: 'List masking policies' },
+   429→   828→                  { method: 'POST', path: '/api/compliance/policies', desc: 'Generate new remediation policies' },
+   430→   829→                  { method: 'GET', path: '/api/compliance/profiles', desc: 'EDI connection profiles audit' },
+   431→   830→                  { method: 'POST', path: '/api/compliance/anonymise', desc: 'Run PII Anonymiser on a manifest' },
+   432→   831→                  { method: 'POST', path: '/api/compliance/audit', desc: 'Run full EDI compliance audit' },
+   433→   832→                  { method: 'POST', path: '/api/compliance/remediate', desc: 'Generate remediation policies + update EDI profiles' },
+   434→   833→                ].map(ep => (
+   435→   834→                  <div key={ep.path + ep.method} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50">
+   436→   835→                    <Badge variant="outline" className={`font-mono text-xs w-14 justify-center ${ep.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-blue-700 border-blue-300'}`}>
+   437→   836→                      {ep.method}
+   438→   837→                    </Badge>
+   439→   838→                    <code className={`text-sm font-mono flex-1 ${ep.path.includes('/system/') ? 'text-slate-900 font-semibold' : 'text-slate-800'}`}>{ep.path}</code>
+   440→   839→                    <span className="text-xs text-slate-500 max-w-[280px] truncate hidden sm:inline">{ep.desc}</span>
+   441→   840→                  </div>
+   442→   841→                ))}
+   443→   842→                <Separator className="my-3" />
+   444→   843→                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+   445→   844→                  <p className="text-xs text-emerald-800 font-medium">The /api/system/ping endpoints communicate through all layers: Next.js middleware injects tracking headers, the API handler reads/writes to SQLite via Prisma ORM, and the response includes proof from every layer.</p>
+   446→   845→                </div>
+   447→   846→              </CardContent>
+   448→   847→            </Card>
+   449→   848→          </TabsContent>
+   450→   849→        </Tabs>
+   451→   850→      </main>
+   452→   851→    </div>
+   453→   852→  );
+   454→   853→}
+   455→   854→
