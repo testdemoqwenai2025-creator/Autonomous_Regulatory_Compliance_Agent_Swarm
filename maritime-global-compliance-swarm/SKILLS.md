@@ -451,6 +451,7 @@ The full strategic roadmap with three-tier analysis (current state assessment, c
 | Document | Path | Description |
 |----------|------|-------------|
 | Strategic Roadmap | `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx` | 6-horizon evolution plan (2025-2035), three-tier strategic analysis, investment framework |
+| Technology Deep Dive | `docs/Technology_Deep_Dive_2025-2035.pdf` | Deep-dive on event sourcing, AI/ML, quantum crypto, satellite AIS, SAR/optical vision, data repository evolution |
 | Workflow Diagram | `docs/workflow_diagram.mmd` / `.png` | Mermaid source and rendered 10-phase operational workflow |
 | Skills Reference | `SKILLS.md` | Full capability catalogue, evolution horizons, data repository map |
 | Integration Proof | README.md (Preview Endpoint section) | Always-on 10-component frontend-backend health verification |

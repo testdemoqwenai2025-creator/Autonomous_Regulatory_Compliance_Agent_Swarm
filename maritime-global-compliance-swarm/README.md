@@ -611,6 +611,7 @@ See SKILLS.md for the detailed capability-by-capability evolution path, and the 
 | Strategic Roadmap | `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx` | 6-horizon evolution plan (2025-2035), three-tier analysis, investment framework |
 | Workflow Diagram | `docs/workflow_diagram.mmd` / `.png` | 10-phase operational workflow |
 | Skills Catalogue | `SKILLS.md` | Full capability reference, evolution horizons, data repository map |
+| Technology Deep Dive | `docs/Technology_Deep_Dive_2025-2035.pdf` | Deep-dive on event sourcing, AI/ML, quantum crypto, data repositories, satellite and vision integration |
 | Integration Proof | This file (Preview Endpoint above) | Always-on 10-component frontend-backend health verification |
 
 ---
