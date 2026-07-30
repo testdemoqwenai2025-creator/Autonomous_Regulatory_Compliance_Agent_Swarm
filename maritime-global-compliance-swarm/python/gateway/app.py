@@ -733,7 +733,7 @@ def _register_frontend_status_route(app: FastAPI):
         return {
             "status": "operational" if all_ok else "degraded",
             "timestamp": ts,
-            "gateway_version": "2.1.0",
+            "gateway_version": "3.0.0",
             "services": services,
         }
 
