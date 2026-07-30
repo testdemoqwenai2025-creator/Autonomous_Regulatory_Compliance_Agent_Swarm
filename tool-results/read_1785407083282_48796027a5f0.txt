@@ -1,0 +1,720 @@
+     1→"""
+     2→Satellite and AIS Data Ingestion Stubs.
+     3→
+     4→Provides the foundational interfaces and stub implementations for ingesting
+     5→real-time maritime data from satellite feeds, AIS (Automatic Identification
+     6→System) streams, and environmental monitoring sources. This module defines
+     7→the data contracts and processing pipeline interfaces; actual data source
+     8→connections are implemented in production deployment configurations.
+     9→
+    10→Data Sources Covered:
+    11→- AIS vessel tracking (positional, voyage, static data)
+    12→- Satellite communications (Iridium, VSAT, Inmarsat)
+    13→- Weather data (NOAA GFS, ECMWF ERA5)
+    14→- Environmental monitoring (emissions, sea surface temperature, wave height)
+    15→"""
+    16→
+    17→from __future__ import annotations
+    18→
+    19→import hashlib
+    20→import json
+    21→import logging
+    22→import math
+    23→import time
+    24→from abc import ABC, abstractmethod
+    25→from collections import defaultdict
+    26→from dataclasses import dataclass, field
+    27→from datetime import datetime, timedelta, timezone
+    28→from enum import Enum
+    29→from typing import Any, Callable, Optional
+    30→
+    31→logger = logging.getLogger("satellite_ingest")
+    32→
+    33→
+    34→# ---------------------------------------------------------------------------
+    35→# Data Models
+    36→# ---------------------------------------------------------------------------
+    37→
+    38→class VesselClass(str, Enum):
+    39→    CARGO = "cargo"
+    40→    TANKER = "tanker"
+    41→    CONTAINER = "container"
+    42→    BULK_CARRIER = "bulk_carrier"
+    43→    PASSENGER = "passenger"
+    44→    FISHING = "fishing"
+    45→    TUG = "tug"
+    46→    OTHER = "other"
+    47→
+    48→
+    49→class NavigationStatus(str, Enum):
+    50→    UNDER_WAY = "under_way"
+    51→    AT_ANCHOR = "at_anchor"
+    52→    NOT_UNDER_COMMAND = "not_under_command"
+    53→    RESTRICTED_MANEUVERABILITY = "restricted_maneuverability"
+    54→    MOORED = "moored"
+    55→    AGROUND = "aground"
+    56→    FISHING = "fishing"
+    57→    SAILING = "sailing"
+    58→
+    59→
+    60→@dataclass
+    61→class AISPositionReport:
+    62→    """AIS Type 1/2/3 Position Report."""
+    63→    mmsi: str                          # Maritime Mobile Service Identity
+    64→    timestamp: datetime
+    65→    latitude: float                    # Decimal degrees
+    66→    longitude: float                   # Decimal degrees
+    67→    course_over_ground: float          # Degrees (0-360)
+    68→    speed_over_ground: float           # Knots
+    69→    true_heading: float                # Degrees
+    70→    navigation_status: NavigationStatus = NavigationStatus.UNDER_WAY
+    71→    imo: Optional[str] = None
+    72→    callsign: Optional[str] = None
+    73→    vessel_name: Optional[str] = None
+    74→    vessel_type: Optional[VesselClass] = None
+    75→    destination: Optional[str] = None
+    76→    eta: Optional[datetime] = None
+    77→    draft: Optional[float] = None
+    78→    data_source: str = "ais"           # ais, satellite_ais, radar
+    79→
+    80→
+    81→@dataclass
+    82→class WeatherObservation:
+    83→    """Marine weather observation from satellite or buoy."""
+    84→    observation_id: str
+    85→    timestamp: datetime
+    86→    latitude: float
+    87→    longitude: float
+    88→    wind_speed_knots: float = 0.0
+    89→    wind_direction_deg: float = 0.0
+    90→    wave_height_m: float = 0.0
+    91→    wave_period_s: float = 0.0
+    92→    sea_surface_temp_c: float = 0.0
+    93→    air_pressure_hpa: float = 1013.25
+    94→    visibility_nm: float = 10.0
+    95→    precipitation_mm_h: float = 0.0
+    96→    data_source: str = "noaa_gfs"      # noaa_gfs, ecmwf, buoy, satellite
+    97→    forecast_hours_ahead: int = 0      # 0 = observation, >0 = forecast
+    98→
+    99→
+   100→@dataclass
+   101→class EmissionsReading:
+   102→    """Vessel emissions monitoring data."""
+   103→    vessel_id: str
+   104→    timestamp: datetime
+   105→    latitude: float
+   106→    longitude: float
+   107→    co2_emissions_tonnes: float = 0.0
+   108→    sox_emissions_kg: float = 0.0
+   109→    nox_emissions_kg: float = 0.0
+   110→    fuel_consumption_tonnes: float = 0.0
+   111→    fuel_type: str = "VLSFO"           # VLSFO, LNG, Methanol, Hydrogen
+   112→    speed_knots: float = 0.0
+   113→    data_source: str = "mrv"           # MRV (EU), IMO DCS, sensor
+   114→
+   115→
+   116→@dataclass
+   117→class ComplianceCorrelationEvent:
+   118→    """Event produced when external data correlates with a compliance finding."""
+   119→    event_type: str                    # e.g., "weather_hold", "route_deviation", "emissions_breach"
+   120→    finding_id: Optional[str]
+   121→    vessel_id: Optional[str]
+   122→    correlation_type: str              # weather, emissions, route, port_closure
+   123→    severity_impact: str               # "upgraded", "downgraded", "no_change"
+   124→    description: str
+   125→    external_data_ref: str             # Reference to the external data source
+   126→    confidence: float = 0.0            # 0.0 - 1.0
+   127→    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+   128→
+   129→
+   130→# ---------------------------------------------------------------------------
+   131→# Abstract Data Ingesters
+   132→# ---------------------------------------------------------------------------
+   133→
+   134→class DataIngester(ABC):
+   135→    """Abstract base for all data ingestion sources."""
+   136→
+   137→    def __init__(self, source_name: str):
+   138→        self.source_name = source_name
+   139→        self._running = False
+   140→        self._processed_count = 0
+   141→        self._error_count = 0
+   142→        self._last_ingest: Optional[datetime] = None
+   143→
+   144→    @abstractmethod
+   145→    def connect(self) -> bool:
+   146→        """Establish connection to the data source. Returns True on success."""
+   147→        ...
+   148→
+   149→    @abstractmethod
+   150→    def ingest(self) -> list[Any]:
+   151→        """Ingest and return new data points. Returns empty list if no new data."""
+   152→        ...
+   153→
+   154→    def disconnect(self) -> None:
+   155→        """Clean up connections."""
+   156→        self._running = False
+   157→
+   158→    @property
+   159→    def stats(self) -> dict:
+   160→        return {
+   161→            "source": self.source_name,
+   162→            "running": self._running,
+   163→            "processed_count": self._processed_count,
+   164→            "error_count": self._error_count,
+   165→            "last_ingest": self._last_ingest.isoformat() if self._last_ingest else None,
+   166→        }
+   167→
+   168→
+   169→# ---------------------------------------------------------------------------
+   170→# Stub Implementations
+   171→# ---------------------------------------------------------------------------
+   172→
+   173→class AISIngestStub(DataIngester):
+   174→    """Stub AIS data ingester for development and testing.
+   175→
+   176→    In production, this connects to:
+   177→    - AIS terrestrial receivers via UDP/TCP
+   178→    - Satellite-AIS providers (exactEarth, Spire, Orbcomm)
+   179→    - National AIS networks via API
+   180→    """
+   181→
+   182→    def __init__(self):
+   183→        super().__init__("ais_terrestrial")
+   184→        self._buffer: list[AISPositionReport] = []
+   185→
+   186→    def connect(self) -> bool:
+   187→        self._running = True
+   188→        logger.info(f"Connected to {self.source_name}")
+   189→        return True
+   190→
+   191→    def ingest(self) -> list[AISPositionReport]:
+   192→        if not self._running:
+   193→            return []
+   194→
+   195→        # In production: parse AIS NMEA sentences from TCP/UDP socket
+   196→        # For development: return empty (data injected via API for testing)
+   197→        results = list(self._buffer)
+   198→        self._buffer.clear()
+   199→        self._processed_count += len(results)
+   200→        self._last_ingest = datetime.now(timezone.utc)
+   201→        return results
+   202→
+   203→    def inject_test_data(self, report: AISPositionReport) -> None:
+   204→        """Inject test data into the buffer (for development/testing)."""
+   205→        self._buffer.append(report)
+   206→
+   207→
+   208→class WeatherIngestStub(DataIngester):
+   209→    """Stub weather data ingester for development and testing.
+   210→
+   211→    In production, this connects to:
+   212→    - NOAA GFS API (15-minute polling cycle)
+   213→    - ECMWF ERA5 reanalysis
+   214→    - Commercial marine weather APIs (StormGeo, DTN)
+   215→    - Port authority weather stations
+   216→    """
+   217→
+   218→    def __init__(self):
+   219→        super().__init__("noaa_gfs_marine")
+   220→        self._zone_cache: dict[str, WeatherObservation] = {}
+   221→
+   222→    def connect(self) -> bool:
+   223→        self._running = True
+   224→        logger.info(f"Connected to {self.source_name}")
+   225→        return True
+   226→
+   227→    def ingest(self) -> list[WeatherObservation]:
+   228→        if not self._running:
+   229→            return []
+   230→
+   231→        # In production: fetch GFS data via HTTP API, parse GRIB2
+   232→        # For development: return cached zone data
+   233→        results = list(self._zone_cache.values())
+   234→        self._processed_count += len(results)
+   235→        self._last_ingest = datetime.now(timezone.utc)
+   236→        return results
+   237→
+   238→    def update_zone(self, zone_id: str, observation: WeatherObservation) -> None:
+   239→        """Update weather data for a zone (for development/testing)."""
+   240→        self._zone_cache[zone_id] = observation
+   241→
+   242→
+   243→class EmissionsIngestStub(DataIngester):
+   244→    """Stub emissions monitoring ingester for development and testing.
+   245→
+   246→    In production, this connects to:
+   247→    - EU MRV (Monitoring, Reporting, Verification) system
+   248→    - IMO DCS (Data Collection System)
+   249→    - Onboard sensor networks via IoT/MQTT
+   250→    - Third-party emissions monitoring APIs
+   251→    """
+   252→
+   253→    def __init__(self):
+   254→        super().__init__("eu_mrv")
+   255→
+   256→    def connect(self) -> bool:
+   257→        self._running = True
+   258→        logger.info(f"Connected to {self.source_name}")
+   259→        return True
+   260→
+   261→    def ingest(self) -> list[EmissionsReading]:
+   262→        if not self._running:
+   263→            return []
+   264→        # In production: fetch MRV reports via API, parse XML/JSON
+   265→        self._last_ingest = datetime.now(timezone.utc)
+   266→        return []
+   267→
+   268→
+   269→# ---------------------------------------------------------------------------
+   270→# Compliance Correlation Engine
+   271→# ---------------------------------------------------------------------------
+   272→
+   273→class ComplianceCorrelator:
+   274→    """Correlates external data (weather, AIS, emissions) with compliance findings.
+   275→
+   276→    Produces ComplianceCorrelationEvents that can be published to the
+   277→    event bus for downstream reaction processing.
+   278→    """
+   279→
+   280→    def __init__(self):
+   281→        self._correlation_rules: list[Callable] = [
+   282→            self._check_weather_hold,
+   283→            self._check_route_deviation,
+   284→            self._check_emissions_breach,
+   285→            self._check_port_closure,
+   286→        ]
+   287→
+   288→    def correlate(self, finding: object, external_data: list[Any]) -> list[ComplianceCorrelationEvent]:
+   289→        """Run all correlation rules against a finding and external data."""
+   290→        events = []
+   291→        for rule in self._correlation_rules:
+   292→            try:
+   293→                result = rule(finding, external_data)
+   294→                if result:
+   295→                    events.extend(result if isinstance(result, list) else [result])
+   296→            except Exception as e:
+   297→                logger.error(f"Correlation rule error: {e}")
+   298→        return events
+   299→
+   300→    def _check_weather_hold(self, finding: object, data: list[Any]) -> Optional[ComplianceCorrelationEvent]:
+   301→        """Check if active weather event warrants SLA pause."""
+   302→        weather_data = [d for d in data if isinstance(d, WeatherObservation)]
+   303→        for obs in weather_data:
+   304→            if obs.wave_height_m > 4.0 or obs.wind_speed_knots > 50:
+   305→                return ComplianceCorrelationEvent(
+   306→                    event_type="weather_hold",
+   307→                    finding_id=getattr(finding, "id", None),
+   308→                    correlation_type="weather",
+   309→                    severity_impact="downgraded",
+   310→                    description=f"Severe weather detected: wind {obs.wind_speed_knots}kn, "
+   311→                                f"waves {obs.wave_height_m}m. SLA clock paused.",
+   312→                    external_data_ref=f"weather:{obs.observation_id}",
+   313→                    confidence=0.85,
+   314→                )
+   315→        return None
+   316→
+   317→    def _check_route_deviation(self, finding: object, data: list[Any]) -> Optional[ComplianceCorrelationEvent]:
+   318→        """Check if AIS data shows unexpected route deviation."""
+   319→        ais_data = [d for d in data if isinstance(d, AISPositionReport)]
+   320→        if len(ais_data) >= 2:
+   321→            latest = ais_data[-1]
+   322→            if latest.navigation_status == NavigationStatus.NOT_UNDER_COMMAND:
+   323→                return ComplianceCorrelationEvent(
+   324→                    event_type="route_deviation",
+   325→                    vessel_id=latest.mmsi,
+   326→                    correlation_type="route",
+   327→                    severity_impact="upgraded",
+   328→                    description=f"Vessel {latest.mmsi} not under command at "
+   329→                                f"({latest.latitude:.4f}, {latest.longitude:.4f}). "
+   330→                                f"Compliance risk upgraded.",
+   331→                    external_data_ref=f"ais:{latest.mmsi}",
+   332→                    confidence=0.90,
+   333→                )
+   334→        return None
+   335→
+   336→    def _check_emissions_breach(self, finding: object, data: list[Any]) -> Optional[ComplianceCorrelationEvent]:
+   337→        """Check if emissions readings exceed EU ETS / IMO thresholds."""
+   338→        emissions_data = [d for d in data if isinstance(d, EmissionsReading)]
+   339→        for reading in emissions_data:
+   340→            if reading.sox_emissions_kg > 500 or reading.nox_emissions_kg > 2000:
+   341→                return ComplianceCorrelationEvent(
+   342→                    event_type="emissions_breach",
+   343→                    vessel_id=reading.vessel_id,
+   344→                    correlation_type="emissions",
+   345→                    severity_impact="upgraded",
+   346→                    description=f"Vessel {reading.vessel_id} emissions breach: "
+   347→                                f"SOx {reading.sox_emissions_kg}kg, "
+   348→                                f"NOx {reading.nox_emissions_kg}kg.",
+   349→                    external_data_ref=f"emissions:{reading.vessel_id}",
+   350→                    confidence=0.95,
+   351→                )
+   352→        return None
+   353→
+   354→    def _check_port_closure(self, finding: object, data: list[Any]) -> Optional[ComplianceCorrelationEvent]:
+   355→        """Check if port closure events affect finding timelines."""
+   356→        # Port closures would come through as weather events or explicit notifications
+   357→        weather_data = [d for d in data if isinstance(d, WeatherObservation)]
+   358→        for obs in weather_data:
+   359→            if obs.visibility_nm < 0.5 and obs.wind_speed_knots > 65:
+   360→                return ComplianceCorrelationEvent(
+   361→                    event_type="port_closure",
+   362→                    finding_id=getattr(finding, "id", None),
+   363→                    correlation_type="weather",
+   364→                    severity_impact="downgraded",
+   365→                    description=f"Port closure conditions detected: visibility {obs.visibility_nm}nm, "
+   366→                                f"wind {obs.wind_speed_knots}kn. Finding SLA extended.",
+   367→                    external_data_ref=f"weather:{obs.observation_id}",
+   368→                    confidence=0.75,
+   369→                )
+   370→        return None
+   371→
+   372→
+   373→# ---------------------------------------------------------------------------
+   374→# Data Pipeline Orchestrator
+   375→# ---------------------------------------------------------------------------
+   376→
+   377→class DataPipelineOrchestrator:
+   378→    """Orchestrates data ingestion from multiple external sources.
+   379→
+   380→    In production, runs as a background service that:
+   381→    1. Polls/connects to each data source
+   382→    2. Normalises incoming data
+   383→    3. Runs compliance correlation
+   384→    4. Publishes correlation events to the event bus
+   385→    """
+   386→
+   387→    def __init__(self):
+   388→        self._ingesters: dict[str, DataIngester] = {}
+   389→        self._correlator = ComplianceCorrelator()
+   390→        self._event_callback: Optional[Callable] = None
+   391→        self._running = False
+   392→
+   393→    def register_ingester(self, name: str, ingester: DataIngester) -> None:
+   394→        self._ingesters[name] = ingester
+   395→
+   396→    def set_event_callback(self, callback: Callable) -> None:
+   397→        """Set callback for publishing correlation events to the event bus."""
+   398→        self._event_callback = callback
+   399→
+   400→    async def run_cycle(self) -> dict:
+   401→        """Execute one ingestion cycle across all sources. Returns stats."""
+   402→        if not self._running:
+   403→            return {"status": "not_running"}
+   404→
+   405→        cycle_stats = {}
+   406→        all_data = []
+   407→
+   408→        for name, ingester in self._ingesters.items():
+   409→            try:
+   410→                data = ingester.ingest()
+   411→                all_data.extend(data)
+   412→                cycle_stats[name] = {
+   413→                    "status": "ok",
+   414→                    "records": len(data),
+   415→                }
+   416→            except Exception as e:
+   417→                logger.error(f"Ingestion error for {name}: {e}")
+   418→                cycle_stats[name] = {
+   419→                    "status": "error",
+   420→                    "error": str(e),
+   421→                }
+   422→
+   423→        return {
+   424→            "status": "completed",
+   425→            "timestamp": datetime.now(timezone.utc).isoformat(),
+   426→            "sources": cycle_stats,
+   427→            "total_records": len(all_data),
+   428→        }
+   429→
+   430→    def start(self) -> None:
+   431→        """Start all ingesters."""
+   432→        self._running = True
+   433→        for name, ingester in self._ingesters.items():
+   434→            ingester.connect()
+   435→        logger.info(f"Data pipeline started with {len(self._ingesters)} sources")
+   436→
+   437→    def stop(self) -> None:
+   438→        """Stop all ingesters."""
+   439→        self._running = False
+   440→        for ingester in self._ingesters.values():
+   441→            ingester.disconnect()
+   442→        logger.info("Data pipeline stopped")
+   443→
+   444→    @property
+   445→    def stats(self) -> dict:
+   446→        return {
+   447→            "running": self._running,
+   448→            "sources": {name: ingester.stats for name, ingester in self._ingesters.items()},
+   449→            "correlator": "active" if self._running else "stopped",
+   450→        }
+   451→
+   452→# ---------------------------------------------------------------------------
+   453→# Enhanced Satellite AIS Ingestion (H1)
+   454→# ---------------------------------------------------------------------------
+   455→
+   456→@dataclass
+   457→class AISMessage:
+   458→    """Lightweight AIS message for satellite-based ingestion.
+   459→
+   460→    Designed for high-throughput satellite AIS feeds where messages arrive
+   461→    in NMEA VDM/VDO format or JSON payloads from provider APIs.
+   462→    """
+   463→    mmsi: str
+   464→    lat: float
+   465→    lon: float
+   466→    heading: float          # True heading in degrees (0-360)
+   467→    speed: float            # Speed over ground in knots
+   468→    timestamp: datetime
+   469→    nav_status: str = ""    # Raw navigation status from AIS
+   470→    message_type: int = 1   # AIS message type (1=position, 5=static, etc.)
+   471→
+   472→    @property
+   473→    def position_hash(self) -> str:
+   474→        return hashlib.sha256(
+   475→            f"{self.mmsi}:{self.lat:.6f}:{self.lon:.6f}:{self.timestamp.isoformat()}".encode()
+   476→        ).hexdigest()[:16]
+   477→
+   478→
+   479→@dataclass
+   480→class AISMessageBatch:
+   481→    """Container for a batch of AIS messages from a single provider poll."
+   482→    """
+   483→    messages: list[AISMessage] = field(default_factory=list)
+   484→    provider: str = ""
+   485→    received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+   486→    batch_id: str = field(default_factory=lambda: hashlib.sha256(
+   487→        f"{time.time_ns()}".encode()
+   488→    ).hexdigest()[:12])
+   489→
+   490→    @property
+   491→    def size(self) -> int:
+   492→        return len(self.messages)
+   493→
+   494→    def sort_by_timestamp(self) -> None:
+   495→        self.messages.sort(key=lambda m: m.timestamp)
+   496→
+   497→
+   498→@dataclass
+   499→class AISIngestionConfig:
+   500→    """Configuration for the AIS ingestion pipeline."""
+   501→    provider_name: str = "exactearth"
+   502→    api_endpoint: str = ""
+   503→    api_key: str = ""
+   504→    dedup_window_seconds: float = 300.0   # 5 minutes
+   505→    interpolation_max_gap_minutes: float = 30.0
+   506→    batch_size: int = 1000
+   507→    poll_interval_seconds: float = 60.0
+   508→    spatial_index_target: str = "postgis"  # postgis | memory
+   509→
+   510→
+   511→# Pre-defined provider configurations
+   512→PROVIDER_CONFIGS: dict[str, AISIngestionConfig] = {
+   513→    "exactearth": AISIngestionConfig(
+   514→        provider_name="exactearth",
+   515→        api_endpoint="https://api.exactearth.com/v2/",
+   516→        dedup_window_seconds=300.0,
+   517→        interpolation_max_gap_minutes=30.0,
+   518→        batch_size=2000,
+   519→        poll_interval_seconds=30.0,
+   520→    ),
+   521→    "spire": AISIngestionConfig(
+   522→        provider_name="spire",
+   523→        api_endpoint="https://ais.spire.com/v2/",
+   524→        dedup_window_seconds=300.0,
+   525→        interpolation_max_gap_minutes=25.0,
+   526→        batch_size=5000,
+   527→        poll_interval_seconds=15.0,
+   528→    ),
+   529→    "orbcomm": AISIngestionConfig(
+   530→        provider_name="orbcomm",
+   531→        api_endpoint="https://api.orbcomm.com/v1/ais/",
+   532→        dedup_window_seconds=300.0,
+   533→        interpolation_max_gap_minutes=30.0,
+   534→        batch_size=1500,
+   535→        poll_interval_seconds=45.0,
+   536→    ),
+   537→}
+   538→
+   539→
+   540→# Compliance event types generated by the AIS pipeline
+   541→AIS_COMPLIANCE_EVENT_TYPES: list[str] = [
+   542→    "ROUTE_DEVIATION",
+   543→    "AIS_GAP_DETECTED",
+   544→    "POSITIONAL_ANOMALY",
+   545→    "DARK_SHIP_SUSPECTED",
+   546→]
+   547→
+   548→
+   549→# ---------------------------------------------------------------------------
+   550→# AIS Pipeline Stages
+   551→# ---------------------------------------------------------------------------
+   552→
+   553→def ais_decode(raw_payloads: list[dict]) -> list[AISMessage]:
+   554→    """Pipeline stage: Decode raw provider payloads into AISMessage objects.
+   555→
+   556→    In production, this parses NMEA VDM sentences or provider-specific JSON.
+   557→    For development, it extracts fields from pre-parsed dicts.
+   558→    """
+   559→    messages = []
+   560→    for payload in raw_payloads:
+   561→        try:
+   562→            ts = payload.get("timestamp")
+   563→            if isinstance(ts, str):
+   564→                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+   565→            elif ts is None:
+   566→                ts = datetime.now(timezone.utc)
+   567→            messages.append(AISMessage(
+   568→                mmsi=str(payload.get("mmsi", "")),
+   569→                lat=float(payload.get("latitude", 0.0)),
+   570→                lon=float(payload.get("longitude", 0.0)),
+   571→                heading=float(payload.get("heading", 0.0)),
+   572→                speed=float(payload.get("speed", 0.0)),
+   573→                timestamp=ts,
+   574→                nav_status=str(payload.get("nav_status", "")),
+   575→                message_type=int(payload.get("message_type", 1)),
+   576→            ))
+   577→        except (ValueError, TypeError) as e:
+   578→            logger.warning(f"AIS decode error: {e}")
+   579→    return messages
+   580→
+   581→
+   582→def ais_deduplicate(messages: list[AISMessage], window_seconds: float = 300.0) -> list[AISMessage]:
+   583→    """Pipeline stage: Remove duplicate messages within a time window.
+   584→
+   585→    Duplicates are identified by same MMSI with timestamps within
+   586→    the specified window (default 300 seconds). Keeps the most
+   587→    recent message in each dedup group.
+   588→    """
+   589→    if not messages:
+   590→        return []
+   591→
+   592→    messages.sort(key=lambda m: (m.mmsi, m.timestamp))
+   593→    result: list[AISMessage] = []
+   594→    seen: dict[str, datetime] = {}
+   595→
+   596→    for msg in messages:
+   597→        last_ts = seen.get(msg.mmsi)
+   598→        if last_ts is None:
+   599→            seen[msg.mmsi] = msg.timestamp
+   600→            result.append(msg)
+   601→        else:
+   602→            delta = (msg.timestamp - last_ts).total_seconds()
+   603→            if delta > window_seconds:
+   604→                seen[msg.mmsi] = msg.timestamp
+   605→                result.append(msg)
+   606→            # else: duplicate within window, skip
+   607→
+   608→    logger.debug(f"AIS dedup: {len(messages)} -> {len(result)} messages (window={window_seconds}s)")
+   609→    return result
+   610→
+   611→
+   612→def ais_temporal_interpolate(
+   613→    messages: list[AISMessage],
+   614→    max_gap_minutes: float = 30.0,
+   615→) -> list[AISMessage]:
+   616→    """Pipeline stage: Linear interpolation for gaps shorter than max_gap_minutes.
+   617→
+   618→    For each MMSI, if the time gap between consecutive messages is less than
+   619→    max_gap_minutes, insert interpolated points at 5-minute intervals.
+   620→    This improves route continuity for compliance checks.
+   621→    """
+   622→    if not messages:
+   623→        return []
+   624→
+   625→    max_gap_seconds = max_gap_minutes * 60.0
+   626→    interval_seconds = 300.0  # 5-minute intervals
+   627→
+   628→    by_mmsi: dict[str, list[AISMessage]] = defaultdict(list)
+   629→    for msg in messages:
+   630→        by_mmsi[msg.mmsi].append(msg)
+   631→
+   632→    result: list[AISMessage] = []
+   633→    for mmsi, track in by_mmsi.items():
+   634→        track.sort(key=lambda m: m.timestamp)
+   635→        result.append(track[0])
+   636→        for i in range(1, len(track)):
+   637→            prev, curr = track[i - 1], track[i]
+   638→            gap = (curr.timestamp - prev.timestamp).total_seconds()
+   639→            if 0 < gap < max_gap_seconds:
+   640→                n_points = int(gap / interval_seconds)
+   641→                for j in range(1, n_points):
+   642→                    frac = (j * interval_seconds) / gap
+   643→                    interp_lat = prev.lat + frac * (curr.lat - prev.lat)
+   644→                    interp_lon = prev.lon + frac * (curr.lon - prev.lon)
+   645→                    interp_heading = prev.heading + frac * (curr.heading - prev.heading)
+   646→                    interp_speed = prev.speed + frac * (curr.speed - prev.speed)
+   647→                    interp_ts = prev.timestamp + timedelta(seconds=j * interval_seconds)
+   648→                    result.append(AISMessage(
+   649→                        mmsi=mmsi,
+   650→                        lat=interp_lat,
+   651→                        lon=interp_lon,
+   652→                        heading=interp_heading % 360,
+   653→                        speed=max(0.0, interp_speed),
+   654→                        timestamp=interp_ts,
+   655→                        nav_status=prev.nav_status,
+   656→                        message_type=prev.message_type,
+   657→                    ))
+   658→            result.append(curr)
+   659→
+   660→    logger.debug(f"AIS interpolation: {len(messages)} -> {len(result)} messages")
+   661→    return result
+   662→
+   663→
+   664→def ais_spatial_index(messages: list[AISMessage], target: str = "postgis") -> list[dict]:
+   665→    """Pipeline stage: Create spatial index entries.
+   666→
+   667→    For PostGIS target, generates ST_MakePoint SQL expressions.
+   668→    For memory target, returns dicts with lat/lon pairs ready for
+   669→    in-memory spatial indexing (e.g., R-tree).
+   670→    """
+   671→    entries = []
+   672→    for msg in messages:
+   673→        if target == "postgis":
+   674→            entries.append({
+   675→                "mmsi": msg.mmsi,
+   676→                "timestamp": msg.timestamp.isoformat(),
+   677→                "geom_sql": f"ST_MakePoint({msg.lon}, {msg.lat}, 4326)",
+   678→                "heading": msg.heading,
+   679→                "speed": msg.speed,
+   680→            })
+   681→        else:
+   682→            entries.append({
+   683→                "mmsi": msg.mmsi,
+   684→                "timestamp": msg.timestamp.isoformat(),
+   685→                "lat": msg.lat,
+   686→                "lon": msg.lon,
+   687→                "heading": msg.heading,
+   688→                "speed": msg.speed,
+   689→            })
+   690→    return entries
+   691→
+   692→
+   693→def generate_compliance_finding(
+   694→    event_type: str,
+   695→    mmsi: str,
+   696→    description: str,
+   697→    severity: str = "medium",
+   698→    confidence: float = 0.8,
+   699→    evidence: Optional[dict] = None,
+   700→) -> dict:
+   701→    """Create a compliance finding dict ready for the event bus.
+   702→
+   703→    This stub produces a dict conforming to the event bus schema.
+   704→    Downstream consumers (compliance engine, risk scorer) can
+   705→    process these findings immediately.
+   706→    """
+   707→    finding = {
+   708→        "event_type": event_type,
+   709→        "source": "satellite_ais_pipeline",
+   710→        "mmsi": mmsi,
+   711→        "description": description,
+   712→        "severity": severity,
+   713→        "confidence": confidence,
+   714→        "timestamp": datetime.now(timezone.utc).isoformat(),
+   715→        "evidence": evidence or {},
+   716→    }
+   717→    if event_type not in AIS_COMPLIANCE_EVENT_TYPES:
+   718→        logger.warning(f"Unknown AIS compliance event type: {event_type}")
+   719→    return finding
+   720→

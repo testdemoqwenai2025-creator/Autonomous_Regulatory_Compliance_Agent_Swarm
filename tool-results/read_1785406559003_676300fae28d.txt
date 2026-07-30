@@ -1,0 +1,622 @@
+     1→# Maritime Global Compliance Swarm
+     2→
+     3→> **v3.1** — Autonomous regulatory compliance agent swarm for global maritime freight. Automates GDPR/PII anonymisation, EDI compliance audits, remediation policy generation, MTTR telemetry, finding state machine governance, and event-driven reactive compliance — all exposed via a unified Python FastAPI gateway with an interactive HTML dashboard.
+     4→
+     5→---
+     6→
+     7→## Functioning Preview Endpoint
+     8→
+     9→> **This section is permanent.** It proves frontend-backend and all component communication progress. It MUST always feature in this README for every version going forward.
+    10→
+    11→The live frontend-backend communication can be verified at any time via the **Frontend Status** endpoint. This is the single endpoint that confirms the frontend can reach every backend component and proves end-to-end event flow:
+    12→
+    13→```bash
+    14→curl -s http://localhost:8000/api/v1/system/frontend-status | python3 -m json.tool
+    15→```
+    16→
+    17→**What it tests (10 components):**
+    18→
+    19→| # | Component | Test Performed | Expected Status |
+    20→|---|-----------|---------------|----------------|
+    21→| 1 | **Database** | `SELECT 1` read/write probe | `ok` |
+    22→| 2 | **State Machine** | Load full definition (10 states, 20+ transitions), callback bridge active | `ok` |
+    23→| 3 | **Event Bus** | Retrieve statistics — transport type, event count, subscriber count | `ok` or `degraded` |
+    24→| 4 | **Reaction Engine** | Retrieve statistics — active rules count, actions fired | `ok` |
+    25→| 5 | **Anonymiser** | Execute HMAC-SHA256 tokenisation probe | `ok` |
+    26→| 6 | **NER Detector** | Query spaCy availability and layer count | `ok` |
+    27→| 7 | **EDI Auditor** | Execute rule engine match probe | `ok` |
+    28→| 8 | **Remediation** | Load decision matrix (7 remediation routes) | `ok` |
+    29→| 9 | **MTTR Tracker (Go)** | HTTP GET to Golang service health endpoint | `ok` or `unavailable` (expected in dev without Go) |
+    30→| 10 | **Event Flow** | Publish a real `SYSTEM_HEALTH_CHANGED` event, process through subscriber pipeline | `ok` |
+    31→
+    32→**Sample response:**
+    33→```json
+    34→{
+    35→  "status": "operational",
+    36→  "timestamp": "2026-07-30T10:15:00+00:00",
+    37→  "gateway_version": "3.1.0",
+    38→  "services": {
+    39→    "database": {"status": "ok", "detail": "read/write verified"},
+    40→    "state_machine": {"status": "ok", "states": 10, "transitions": 20, "detail": "10 states, 20 transitions, callback bridge active"},
+    41→    "event_bus": {"status": "ok", "transport": "in-process", "events_stored": 42, "subscribers": 7, "detail": "in-process, 42 events, 7 subscribers"},
+    42→    "reaction_engine": {"status": "ok", "active_rules": 7, "actions_fired": 3, "detail": "7 active rules, 3 actions executed"},
+    43→    "anonymiser": {"status": "ok", "detail": "HMAC-SHA256 tokeniser operational"},
+    44→    "ner_detector": {"status": "ok", "layers": 3, "detail": "spaCy: False, layers: 3"},
+    45→    "auditor": {"status": "ok", "detail": "rule engine + audit queries loaded"},
+    46→    "remediation": {"status": "ok", "policies": 7, "detail": "7 remediation routes loaded"},
+    47→    "mttr_tracker": {"status": "unavailable", "detail": "Cannot reach Go MTTR tracker at http://localhost:8080"},
+    48→    "event_flow": {"status": "ok", "detail": "Published event a1b2c3d4... and processed through subscriber pipeline"}
+    49→  }
+    50→}
+    51→```
+    52→
+    53→> **Note:** `mttr_tracker` shows `unavailable` in local development (without the Go service running) — this is expected. In Docker deployment, it shows `ok`. The overall status remains `operational` as long as all Python services and the database are healthy.
+    54→
+    55→---
+    56→
+    57→## Architecture
+    58→
+    59→```
+    60→┌──────────────────────────────────────────────────────────────────────┐
+    61→│                    Maritime Compliance Swarm v3.1                    │
+    62→├──────────────────────────────────────────────────────────────────────┤
+    63→│                                                                       │
+    64→│  ┌──────────────────────┐  ┌───────────────────────────────┐         │
+    65→│  │ Manifest_PII_         │  │ Logistics_EDI_SQL_            │         │
+    66→│  │ Anonymiser      [Py]  │  │ Auditor                [Py]  │         │
+    67→│  │ • HMAC-SHA256 tokens  │  │ • 11 audit queries           │         │
+    68→│  │ • Fernet encryption   │  │ • 5 compliance domains       │         │
+    69→│  │ • ML NER (spaCy)      │  │ • Pluggable query registry    │         │
+    70→│  └──────────┬────────────┘  └──────────┬────────────────────┘         │
+    71→│             │                         │                            │
+    72→│             ▼                         ▼                            │
+    73→│  ┌───────────────────────────────────────────────────────────┐      │
+    74→│  │               Shared Compliance Database                    │      │
+    75→│  │          (SQLite dev / PostgreSQL + PostGIS prod)           │      │
+    76→│  │                                                            │      │
+    77→│  │  • anonymisation_records  • audit_findings                 │      │
+    78→│  │  • masking_policies      • edi_connection_profiles         │      │
+    79→│  │  • mttr_events           • compliance_reports              │      │
+    80→│  │  • finding_transitions   • event_log                       │      │
+    81→│  │  • audit_query_registry                                     │      │
+    82→│  └──────────┬────────────────────┬───────────────────────────┘      │
+    83→│             │                    │                                  │
+    84→│             ▼                    ▼                                  │
+    85→│  ┌──────────────────────┐  ┌───────────────────────────────┐         │
+    86→│  │ Remediation_Route_   │  │ Telemetry_MTTR_               │         │
+    87→│  │ Generator       [Py]  │  │ Tracker                  [Go] │         │
+    88→│  │ • Decision matrix     │  │ • Buffered event ingestion    │         │
+    89→│  │ • EDI profile updates │  │ • MTTR metrics (avg/P95)      │         │
+    90→│  └──────────────────────┘  └───────────────────────────────┘         │
+    91→│                                                                       │
+    92→│  ┌───────────────────────────────────────────────────────────┐      │
+    93→│  │  ★ Finding State Machine     ★ Event Bus                    │      │
+    94→│  │  10 states, 20+ transitions, guard conditions             │      │
+    95→│  │  ★ Reaction Engine — 7 autonomous rules                    │      │
+    96→│  │  ★ Composite Risk Scoring (5-dimensional)                   │      │
+    97→│  │  ★ Compliance Knowledge Graph (in-memory / Neo4j prod)      │      │
+    98→│  │  ★ Middleware Pipeline (auth, rate-limit, audit-log, validation)│   │
+    99→│  │  ★ Structured Observability (health, metrics, logging)      │      │
+   100→│  │  ★ Satellite AIS Ingestion (foundation module)              │      │
+   101→│  │  PostgreSQL LISTEN/NOTIFY (prod) / in-process (dev)         │      │
+   102→│  └───────────────────────────────────────────────────────────┘      │
+   103→│                                                                       │
+   104→│  ┌───────────────────────────────────────────────────────────┐      │
+   105→│  │         FastAPI Gateway + HTML Dashboard            [Py]   │      │
+   106→│  │         Port 8000 — 45 REST routes + /docs                 │      │
+   107→│  │         ★ Frontend Status: /api/v1/system/frontend-status  │      │
+   108→│  └───────────────────────────────────────────────────────────┘      │
+   109→│                                                                       │
+   110→└──────────────────────────────────────────────────────────────────────┘
+   111→```
+   112→
+   113→---
+   114→
+   115→## Quick Start
+   116→
+   117→### Option A: Run with Docker (recommended)
+   118→
+   119→```bash
+   120→git clone https://github.com/testdemoqwenai2025-creator/Autonomous_Regulatory_Compliance_Agent_Swarm.git
+   121→cd Autonomous_Regulatory_Compliance_Agent_Swarm
+   122→cp .env.example .env
+   123→
+   124→# Start gateway + PostgreSQL + Golang MTTR tracker
+   125→docker compose up --build -d
+   126→
+   127→# Verify frontend-backend communication
+   128→curl -s http://localhost:8000/api/v1/system/frontend-status | python3 -m json.tool
+   129→
+   130→# Open the dashboard
+   131→open http://localhost:8000
+   132→```
+   133→
+   134→### Option B: Run locally (Python + SQLite)
+   135→
+   136→```bash
+   137→git clone https://github.com/testdemoqwenai2025-creator/Autonomous_Regulatory_Compliance_Agent_Swarm.git
+   138→cd Autonomous_Regulatory_Compliance_Agent_Swarm
+   139→cp .env.example .env
+   140→
+   141→# Install dependencies
+   142→pip install -r python/requirements.txt
+   143→
+   144→# Initialise SQLite database
+   145→make init
+   146→
+   147→# Start the gateway (serves API + dashboard on port 8000)
+   148→make gateway
+   149→
+   150→# Verify frontend-backend communication
+   151→curl -s http://localhost:8000/api/v1/system/frontend-status | python3 -m json.tool
+   152→
+   153→# Open http://localhost:8000
+   154→```
+   155→
+   156→---
+   157→
+   158→## API Reference (45 routes)
+   159→
+   160→The FastAPI gateway exposes all tools plus the state machine, event bus, reactions, composite scoring, and knowledge graph under a unified REST API. Interactive documentation is available at `/docs` (Swagger) and `/redoc` (ReDoc) when the gateway is running.
+   161→
+   162→### Health & Frontend Status
+   163→
+   164→| Method | Path | Description |
+   165→|--------|------|-------------|
+   166→| GET | `/health` | Liveness probe — status of all tools |
+   167→| GET | `/api/v1/system/frontend-status` | **Frontend status endpoint** — lightweight confirmation that the UI can reach every backend component, including an end-to-end event flow proof. Call this first from any frontend to confirm backend communication. |
+   168→| GET | `/api/v1/system/connectivity` | Full connectivity diagnostics (10 components, per-component latency ms, verbose detail) |
+   169→
+   170→### 1. PII Anonymiser
+   171→
+   172→| Method | Path | Description |
+   173→|--------|------|-------------|
+   174→| POST | `/api/v1/anonymise/manifest` | Tokenise all PII fields in a shipping manifest |
+   175→| POST | `/api/v1/anonymise/free-text` | Detect and tokenise PII in free-text content |
+   176→| POST | `/api/v1/anonymise/scan` | Scan a manifest for PII without modifying data |
+   177→| POST | `/api/v1/anonymise/ner/scan` | ML NER detection (spaCy) for free-text PII |
+   178→| POST | `/api/v1/anonymise/ner/anonymise` | ML NER + anonymise in one step |
+   179→
+   180→**Example — Scan a manifest:**
+   181→```bash
+   182→curl -X POST http://localhost:8000/api/v1/anonymise/scan \
+   183→  -H 'Content-Type: application/json' \
+   184→  -d '{"manifest": {"consignee_name": "John Doe", "consignee_email": "john@ship.com"}}'
+   185→```
+   186→
+   187→**Example — Anonymise:**
+   188→```bash
+   189→curl -X POST http://localhost:8000/api/v1/anonymise/manifest \
+   190→  -H 'Content-Type: application/json' \
+   191→  -d '{
+   192→    "manifest_id": "BL-SG-001",
+   193→    "manifest": {
+   194→      "consignee_name": "John Doe",
+   195→      "consignee_email": "john@ship.com",
+   196→      "container_id": "MSKU1234567"
+   197→    }
+   198→  }'
+   199→```
+   200→
+   201→### 2. EDI SQL Auditor
+   202→
+   203→| Method | Path | Description |
+   204→|--------|------|-------------|
+   205→| POST | `/api/v1/audit/run` | Execute compliance audit queries against FMS database |
+   206→| GET | `/api/v1/audit/profiles` | Audit all EDI connection profiles for encryption compliance |
+   207→| GET | `/api/v1/audit/queries` | List all 11 audit queries with metadata |
+   208→
+   209→### 3. Remediation Generator
+   210→
+   211→| Method | Path | Description |
+   212→|--------|------|-------------|
+   213→| POST | `/api/v1/remediation/policies` | Generate masking policies from open findings |
+   214→| POST | `/api/v1/remediation/edi-profiles` | Update EDI profiles based on findings |
+   215→
+   216→### 4. MTTR Tracker (Golang proxy)
+   217→
+   218→| Method | Path | Description |
+   219→|--------|------|-------------|
+   220→| POST | `/api/v1/mttr/events` | Record a telemetry event for a finding |
+   221→| POST | `/api/v1/events/sm` | Go MTTR SM bridge — receives state machine transitions directly |
+   222→| GET | `/api/v1/mttr/findings/{id}` | Get MTTR timeline for a specific finding |
+   223→| GET | `/api/v1/mttr/report` | Aggregate MTTR report (avg, P95, by severity) |
+   224→| GET | `/api/v1/mttr/open` | All open findings with current MTTR metrics |
+   225→
+   226→### Shared Queries
+   227→
+   228→| Method | Path | Description |
+   229→|--------|------|-------------|
+   230→| GET | `/api/v1/findings` | List audit findings (filter by severity, status, state, risk) |
+   231→| GET | `/api/v1/policies` | List masking policies |
+   232→| GET | `/api/v1/reports` | List compliance reports |
+   233→
+   234→### 5. Finding State Machine
+   235→
+   236→| Method | Path | Description |
+   237→|--------|------|-------------|
+   238→| GET | `/api/v1/state-machine/definition` | Full state machine (10 states, 20+ transitions, timeouts) |
+   239→| GET | `/api/v1/state-machine/transitions/{id}/available` | Valid next states for a finding |
+   240→| POST | `/api/v1/state-machine/transitions/{id}` | Execute a state transition (with guards, audit) |
+   241→| GET | `/api/v1/state-machine/transitions/{id}/timeline` | Full transition history for a finding |
+   242→| POST | `/api/v1/state-machine/timeout-check` | Check all findings for SLA breaches, auto-escalate |
+   243→
+   244→**Example — Transition a finding:**
+   245→```bash
+   246→curl -X POST http://localhost:8000/api/v1/state-machine/transitions/{finding_id} \
+   247→  -H 'Content-Type: application/json' \
+   248→  -d '{
+   249→    "target_state": "assigned",
+   250→    "trigger": "manual_assign",
+   251→    "actor": "user:john.smith",
+   252→    "context": {"assignee": "compliance-team-lead"}
+   253→  }'
+   254→```
+   255→
+   256→### 6. Event Bus & Reaction Engine
+   257→
+   258→| Method | Path | Description |
+   259→|--------|------|-------------|
+   260→| GET | `/api/v1/events/stats` | Event bus statistics (transport, queue depth, counts) |
+   261→| GET | `/api/v1/events` | List recent events (filter by type, correlation ID) |
+   262→| POST | `/api/v1/events/publish` | Manually publish an event (testing, integration) |
+   263→| GET | `/api/v1/reactions/rules` | List all 7 reaction rules with status |
+   264→| GET | `/api/v1/reactions/stats` | Reaction engine statistics |
+   265→| GET | `/api/v1/reactions/log` | Recent reaction execution log |
+   266→| PUT | `/api/v1/reactions/rules/{id}/toggle` | Enable/disable a specific reaction rule |
+   267→
+   268→### 7. Audit Query Registry
+   269→
+   270→| Method | Path | Description |
+   271→|--------|------|-------------|
+   272→| GET | `/api/v1/audit/registry/queries` | List all registered audit queries (built-in + custom) |
+   273→| POST | `/api/v1/audit/registry/queries` | Add a custom audit query to the registry |
+   274→| PUT | `/api/v1/audit/registry/queries/{id}` | Update an existing registry query |
+   275→| DELETE | `/api/v1/audit/registry/queries/{id}` | Remove a query from the registry |
+   276→
+   277→---
+   278→
+   279→## Frontend Integration Layer
+   280→
+   281→The FastAPI gateway at port 8000 is the **sole integration point** for any frontend, middleware, or external consumer. The **Frontend Status endpoint** (`GET /api/v1/system/frontend-status`) is the primary way to verify that the frontend can communicate with every backend component.
+   282→
+   283→```
+   284→Frontend / Middleware / External System
+   285→        │
+   286→        │  HTTP/REST (JSON)
+   287→        ▼
+   288→┌──────────────────────────────────────┐
+   289→│   FastAPI Gateway  (port 8000)        │
+   290→│   ┌──────────────────────────────┐   │
+   291→│   │ Middleware Pipeline           │   │
+   292→│   │  • Auth (JWT / API key)      │   │
+   293→│   │  • Rate Limiting (token bucket)│  │
+   294→│   │  • Request Validation         │   │
+   295→│   │  • Structured Audit Logging   │   │
+   296→│   └──────────┬───────────────────┘   │
+   297→│              │                       │
+   298→│    ┌─────────┼─────────┐             │
+   299→│    ▼         ▼         ▼             │
+   300→│ Anonymiser  Auditor  Remediation     │
+   301→│ (Python)    (Python) (Python)        │
+   302→│              │                       │
+   303→│              ▼                       │
+   304→│         MTTR Tracker (Go:8080)       │
+   305→│         via httpx proxy              │
+   306→└──────────────────────────────────────┘
+   307→```
+   308→
+   309→### Integration Patterns
+   310→
+   311→| Pattern | How | Use Case |
+   312→|---------|-----|----------|
+   313→| **Frontend Status** | `GET /api/v1/system/frontend-status` | **Primary integration check** — call this first from any frontend to confirm all 10 backend services are reachable + end-to-end event flow proof |
+   314→| **Direct REST** | Frontend calls `GET/POST /api/v1/*` | Dashboard data, user actions |
+   315→| **Python SDK** | `from client import ComplianceSwarmClient` | Backend-to-backend, scripting |
+   316→| **MTTR Proxy** | Gateway proxies `/api/v1/mttr/*` → `Go:8080` | Transparent language boundary |
+   317→| **CORS** | `Access-Control-Allow-Origin` configurable | SPA, mobile apps |
+   318→| **OpenAPI** | Auto-generated at `/docs` | API exploration, codegen |
+   319→| **Connectivity Check** | `GET /api/v1/system/connectivity` | Verbose per-component health (latency, detail) |
+   320→| **SM→EventBus bridge** | Auto-emit callback on every transition | State changes trigger reaction rules immediately |
+   321→| **SM→Go MTTR bridge** | Async HTTP POST on every transition | Telemetry stays in sync across Python and Go |
+   322→
+   323→---
+   324→
+   325→## Interactive Dashboard
+   326→
+   327→The gateway serves a built-in HTML dashboard at `/` (port 8000) with 10 tabs:
+   328→
+   329→| Tab | Endpoint Called | Description |
+   330→|-----|----------------|-------------|
+   331→| **Tools** | — | Overview of all 6 tools with click-through navigation |
+   332→| **Backend Status** | `GET /api/v1/system/frontend-status` | Live status grid of all 10 backend services with operational/degraded badges. Auto-refreshes on tab selection. Confirms frontend-to-backend communication for every component. |
+   333→| **Connectivity** | `GET /api/v1/system/connectivity` | Per-component health check with latency measurements and verbose detail |
+   334→| **Anonymiser** | `POST /api/v1/anonymise/scan`, `/api/v1/anonymise/manifest` | PII scan and tokenise manifests interactively |
+   335→| **Auditor** | `POST /api/v1/audit/run`, `GET /api/v1/audit/profiles` | Run compliance audits by domain, view EDI profile compliance |
+   336→| **Remediation** | `POST /api/v1/remediation/policies`, `/api/v1/remediation/edi-profiles` | Generate masking policies and update EDI profiles |
+   337→| **MTTR Tracker** | `GET /api/v1/mttr/report`, `/api/v1/mttr/open` | MTTR avg/P95 metrics, open finding tracking |
+   338→| **Findings** | `GET /api/v1/findings`, `/api/v1/policies`, `/api/v1/reports` | Browse findings (with state column), policies, and reports |
+   339→| **State Machine** | `GET /api/v1/state-machine/definition`, `POST /api/v1/state-machine/transitions/{id}` | Visual state flow, transition explorer, timeline viewer, timeout check |
+   340→| **Event Bus** | `GET /api/v1/events/stats`, `/api/v1/events`, `/api/v1/reactions/rules` | Event bus stats, recent events, reaction rules with toggles, test publisher |
+   341→
+   342→---
+   343→
+   344→## Python Client SDK
+   345→
+   346→A typed client is included for frontend and integration use:
+   347→
+   348→```python
+   349→from client import ComplianceSwarmClient, ComplianceDomain, RemediationMode
+   350→
+   351→api = ComplianceSwarmClient(base_url="http://localhost:8000")
+   352→
+   353→# Verify frontend-backend communication
+   354→status = api.get_frontend_status()
+   355→print(f"System status: {status['status']}")
+   356→for name, svc in status['services'].items():
+   357→    print(f"  {name}: {svc['status']}")
+   358→
+   359→# Scan a manifest for PII
+   360→scan = api.scan_manifest({"consignee_name": "John Doe", "consignee_email": "john@ship.com"})
+   361→print(f"Found {scan.pii_fields_found} PII fields")
+   362→
+   363→# Anonymise
+   364→result = api.anonymise_manifest(
+   365→    manifest_id="BL-SG-001",
+   366→    manifest={"consignee_name": "John Doe", "container_id": "MSKU123"},
+   367→)
+   368→print(result.anonymised_manifest)  # PII replaced with MTS_CONS_xxxx tokens
+   369→
+   370→# Run an audit
+   371→audit = api.run_audit(domain=ComplianceDomain.ENCRYPTION)
+   372→print(f"{audit.findings_count} findings from {audit.queries_executed} queries")
+   373→
+   374→# Generate remediation policies (dry-run)
+   375→policies = api.generate_policies(mode=RemediationMode.DRY_RUN)
+   376→
+   377→# MTTR report
+   378→report = api.get_mttr_report()
+   379→print(f"Avg MTTR: {report.avg_mttr_hours}h, P95: {report.p95_mttr_hours}h")
+   380→
+   381→api.close()
+   382→```
+   383→
+   384→---
+   385→
+   386→## v3.0 Capabilities
+   387→
+   388→### Core Tools
+   389→
+   390→| Tool | Language | Purpose |
+   391→|------|----------|---------|
+   392→| **Manifest PII Anonymiser** | Python | HMAC-SHA256 deterministic tokenisation, Fernet encryption, multi-jurisdiction rules (GDPR, CCPA, LGPD, PDPA, PIPA), ML NER (spaCy) |
+   393→| **Logistics EDI SQL Auditor** | Python | 11 parametric SQL queries, 5 compliance domains, pluggable query registry, finding persistence |
+   394→| **Remediation Route Generator** | Python | Decision matrix mapping risk categories to masking actions, EDI profile updater, state machine integration |
+   395→| **Telemetry MTTR Tracker** | Golang | Buffered event ingestion, 10-phase lifecycle model, SM event endpoint, MTTR avg/P95 metrics |
+   396→
+   397→### Governance Layer (v3.0)
+   398→
+   399→| Component | Language | Purpose |
+   400→|-----------|----------|---------|
+   401→| **Finding State Machine** | Python | 10-state lifecycle with guard conditions, timeout SLAs, audit trail, legacy bridge, auto-emit callback |
+   402→| **Event Bus** | Python | Database-backed event store, PostgreSQL LISTEN/NOTIFY, in-process queue (dev), 7 subscriber rules |
+   403→| **Reaction Engine** | Python | 7 autonomous reaction rules, conditional evaluation, runtime toggle |
+   404→| **Composite Risk Scoring** | Python | 5-dimensional weighted model (severity 30%, jurisdiction 20%, sensitivity 20%, exposure 15%, urgency 15%) → CRS [0.0, 1.0] |
+   405→| **Compliance Knowledge Graph** | Python | In-memory adjacency-list graph with BFS traversal, conflict detection, gap analysis (Neo4j for prod) |
+   406→| **Middleware Pipeline** | Python | Auth (JWT/API key), rate limiting (token bucket), request validation, structured audit logging |
+   407→| **Observability** | Python | Structured JSON logging, health aggregator, metrics collector (counters, gauges, histograms) |
+   408→| **Satellite AIS Ingestion** | Python | Foundation module for satellite AIS data pipeline (Kafka + PostGIS target) |
+   409→| **API Gateway + Dashboard** | Python (FastAPI) | Unified REST API (45 routes), 10-tab HTML dashboard, OpenAPI docs, Python SDK |
+   410→
+   411→---
+   412→
+   413→## Compliance Domains
+   414→
+   415→| Domain | Queries | Key Standards |
+   416→|--------|---------|---------------|
+   417→| **Encryption** | 3 | GDPR Art.32, ISM Code |
+   418→| **Customs Documentation** | 3 | WCO SAFE Framework, SOLAS VGM, IMDG Code |
+   419→| **EDI Format** | 2 | UN/EDIFACT D.21A, ANSI X12 8.6 |
+   420→| **Data Retention** | 2 | GDPR Art.5(1)(e), Art.17 |
+   421→| **Access Control** | 1 | ISO 27001 A.9 |
+   422→
+   423→---
+   424→
+   425→## CLI Reference
+   426→
+   427→```bash
+   428→make gateway          # Start API gateway + dashboard (port 8000)
+   429→make gateway-prod      # Start gateway without auto-reload
+   430→make init             # Initialise SQLite schema
+   431→make scan DIR=data/    # Scan manifests for PII
+   432→make audit            # Run full EDI compliance audit
+   433→make audit-profiles   # Audit EDI connection profiles
+   434→make remediate        # Generate remediation policies (dry-run)
+   435→make update-edi       # Update EDI profiles (dry-run)
+   436→make mttr             # Build and run Golang MTTR tracker
+   437→make seed-policies    # Seed default masking policies
+   438→make test             # Run Python tests
+   439→make lint             # Lint Python + Go code
+   440→make docker-up        # Docker: gateway + DB + MTTR
+   441→make docker-up-all    # Docker: everything including one-shot CLI tools
+   442→make docker-down      # Stop all Docker services
+   443→```
+   444→
+   445→---
+   446→
+   447→## Docker Services
+   448→
+   449→| Service | Port | Description |
+   450→|---------|------|-------------|
+   451→| `gateway` | 8000 | FastAPI gateway + HTML dashboard + OpenAPI docs + state machine bridge |
+   452→| `mttr-tracker` | 8080 | Golang MTTR telemetry service (10-phase model, SM event ingestion) |
+   453→| `db` | 5432 | PostgreSQL 16 + PostGIS 3.4 |
+   454→| `anonymiser` | — | One-shot PII anonymisation (profile: `tools`) |
+   455→| `auditor` | — | One-shot EDI audit (profile: `tools`) |
+   456→| `remediation` | — | One-shot remediation (profile: `tools`) |
+   457→
+   458→---
+   459→
+   460→## Project Structure
+   461→
+   462→```
+   463→maritime-global-compliance-swarm/
+   464→├── python/
+   465→│   ├── shared/                # Config, ORM models (9 tables, 8 enums), database layer
+   466→│   │   ├── models.py          # 9 ORM tables including finding_transitions, event_log
+   467→│   │   ├── state_machine.py   # 10-state finding lifecycle, guard conditions, timeouts
+   468→│   │   ├── event_bus.py       # Event store, pub/sub, PG LISTEN/NOTIFY
+   469→│   │   ├── reactions.py       # 7 autonomous reaction rules engine
+   470→│   │   ├── risk_scorer.py     # ★ Composite risk scoring (5 dimensions, weighted CRS)
+   471→│   │   ├── knowledge_graph.py # ★ Compliance knowledge graph (10 node types, 11 edge types)
+   472→│   │   ├── middleware.py      # ★ Composable middleware pipeline (auth, rate-limit, audit, validation)
+   473→│   │   ├── observability.py   # ★ Structured logging, health aggregator, metrics collector
+   474→│   │   ├── satellite_ingest.py # ★ Satellite AIS ingestion foundation
+   475→│   │   └── config.py          # Centralised SwarmConfig
+   476→│   ├── anonymiser/            # Manifest PII Anonymiser
+   477→│   ├── edi_auditor/           # Logistics EDI SQL Auditor
+   478→│   ├── remediation/           # Remediation Route Generator
+   479→│   ├── gateway/               # FastAPI gateway + 10-tab HTML dashboard
+   480→│   ├── client/                # Python SDK for frontend integration
+   481→│   ├── requirements.txt
+   482→│   └── Dockerfile
+   483→├── golang/
+   484→│   ├── cmd/mttr_tracker/      # CLI entrypoint
+   485→│   ├── internal/
+   486→│   │   ├── config/            # Environment configuration
+   487→│   │   ├── models/            # Data structures (10 EventPhase constants)
+   488→│   │   ├── database/          # DB operations (SQLite + Postgres)
+   489→│   │   └── tracker/           # Buffered event engine + 10-phase model
+   490→│   ├── pkg/api/               # HTTP REST API + /api/v1/events/sm
+   491→│   ├── go.mod
+   492→│   └── Dockerfile
+   493→├── docs/
+   494→│   ├── Strategic_Analysis_Maritime_Compliance_Swarm.docx
+   495→│   ├── workflow_diagram.mmd
+   496→│   └── workflow_diagram.png
+   497→├── .github/workflows/ci.yml
+   498→├── docker-compose.yml
+   499→├── Makefile
+   500→├── .env.example
+   501→├── SKILLS.md
+   502→└── README.md
+   503→```
+   504→
+   505→---
+   506→
+   507→## Operational Workflow
+   508→
+   509→See `docs/workflow_diagram.mmd` (Mermaid) or `docs/workflow_diagram.png` (rendered).
+   510→
+   511→The swarm operates in 10 phases:
+   512→
+   513→1. **Ingestion** — Raw manifests from FMS/EDI/satellite/IoT streams
+   514→2. **Detection** — PII rule engine + ML NER classifies fields by jurisdiction
+   515→3. **Tokenisation** — HMAC-SHA256 vault replaces PII with deterministic tokens
+   516→4. **Audit** — 11 SQL queries detect encryption, customs, and EDI violations
+   517→5. **Risk Scoring** — 5-dimensional composite risk scoring (severity, jurisdiction, sensitivity, exposure, urgency)
+   518→6. **State Machine Governance** — Finding lifecycle managed through 10 validated states with guard conditions, timeout SLAs, and dual-emit callback (EventBus + Go MTTR)
+   519→7. **Event-Driven Reactions** — 7 autonomous rules react to findings (CRITICAL alerts, PII auto-scan, cert checks, timeout escalation)
+   520→8. **Remediation** — Decision matrix auto-generates masking policies and EDI fixes
+   521→9. **Telemetry** — Golang service tracks MTTR across all findings, synced via SM bridge
+   522→10. **Observability** — Structured JSON logs, health aggregation, metrics collection, middleware audit trail
+   523→
+   524→### Finding State Machine
+   525→
+   526→Every compliance finding follows a validated lifecycle:
+   527→
+   528→```
+   529→DETECTED → TRIAGED → ASSIGNED → IN_REMEDIATION → AWAITING_VERIFICATION → VERIFIED → CLOSED
+   530→    │          │           │              │                    │                    │
+   531→    │          └── FALSE_POSITIVE     │              │                    └── IN_REMEDIATION (regression)
+   532→    │                              └── ESCALATED ←───┘                    │
+   533→    │                                  │                                    │
+   534→    └────────────────────────── RISK_ACCEPTED ────────────────────── CLOSED
+   535→```
+   536→
+   537→**Key features:**
+   538→- **Guard conditions**: CRITICAL findings cannot transition to RISK_ACCEPTED without sign-off
+   539→- **Timeout rules**: CRITICAL = 1hr per state, HIGH = 4hr, MEDIUM = 24hr (configurable per state)
+   540→- **Auto-escalation**: Timeout breaches automatically transition to ESCALATED via timer actor
+   541→- **Audit trail**: Every transition recorded in `finding_transitions` table with trigger, actor, context
+   542→- **Dual-emit callback**: Every successful transition publishes to event bus AND forwards to Go MTTR tracker
+   543→- **Legacy bridge**: Maps old 5-state `AuditStatus` to new 10-state `FindingState` for backward compatibility
+   544→
+   545→### Event-Driven Reactions
+   546→
+   547→The swarm reacts autonomously to compliance events through 7 built-in rules:
+   548→
+   549→| Rule | Event | Action |
+   550→|------|-------|--------|
+   551→| Critical Notification | `finding.created` (CRITICAL) | Emit high-priority alert for immediate assignment |
+   552→| PII Auto-Scan | `finding.created` (PII_EXPOSURE) | Queue related manifests for anonymisation scan |
+   553→| Cert Renewal Check | `finding.created` (CERT_EXPIRY) | Schedule 24hr cert renewal check |
+   554→| Timeout Escalation | `finding.timeout_breach` | Auto-escalate via state machine |
+   555→| Verification Reminder | `finding.state_changed` → awaiting_verification | Emit reminder with timeout window |
+   556→| Audit Summary | `audit.completed` | Log severity breakdown |
+   557→| MTTR Baseline | `finding.created` (CRITICAL/HIGH) | Create MTTR tracking baseline |
+   558→
+   559→---
+   560→
+   561→## Strategic Evolution Roadmap
+   562→
+   563→A comprehensive strategic roadmap document is available at `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx` covering the six-horizon evolution plan from 2025 to 2035. The roadmap is structured as a three-tier analysis:
+   564→
+   565→- **Tier 1:** Current state assessment — architecture maturity, composite risk scoring, middleware, observability
+   566→- **Tier 2:** Competitive and market positioning — regulatory landscape evolution, data repository proliferation
+   567→- **Tier 3:** Technology evolution trajectory — satellite integration, AI/ML, event sourcing, CQRS
+   568→
+   569→### Six Evolution Horizons
+   570→
+   571→| Horizon | Period | Focus |
+   572→|---------|--------|-------|
+   573→| **H1: Foundation Hardening** | 2025-2026 | PostgreSQL+PostGIS, EU ETS auditing, satellite AIS pipeline, JWT auth |
+   574→| **H2: Intelligence Augmentation** | 2026-2027 | ML anomaly detection, knowledge graph (Neo4j), weather-aware compliance |
+   575→| **H3: Autonomous Operations** | 2027-2029 | Closed-loop remediation, multi-party orchestration, streaming MTTR (SSE) |
+   576→| **H4: Predictive Intelligence** | 2029-2031 | Violation prediction, NLP regulatory monitoring, digital twin compliance modelling |
+   577→| **H5: Ecosystem Integration** | 2031-2033 | Federated learning, regulatory sandboxes, cross-border data governance automation |
+   578→| **H6: Autonomous Governance** | 2033-2035 | Self-healing compliance, quantum-resistant cryptography, autonomous decision authority |
+   579→
+   580→See SKILLS.md for the detailed capability-by-capability evolution path, and the strategic roadmap DOCX for the full analysis.
+   581→
+   582→---
+   583→
+   584→## Jurisdictions Supported
+   585→
+   586→| Jurisdiction | Regulation | Key Requirements |
+   587→|-------------|------------|-------------------|
+   588→| **GDPR** | EU General Data Protection Regulation | Art.25 (data protection by design), Art.32 (security), Art.5(1)(e) (storage limitation) |
+   589→| **CCPA** | California Consumer Privacy Act | Consumer data access and deletion rights |
+   590→| **LGPD** | Brazil Lei Geral de Protecao de Dados | Consent-based processing, DPO requirements |
+   591→| **PDPA** | Singapore Personal Data Protection Act | Purpose limitation, consent obligations |
+   592→| **PIPA** | South Korea Personal Information Protection Act | Consent and data minimisation |
+   593→
+   594→---
+   595→
+   596→## Security Considerations
+   597→
+   598→- **HMAC key** — drives all tokenisation determinism; rotating it invalidates every token. Treat as a root CA key.
+   599→- **Fernet keys** — generated per-session by default; for production, rotate via a key management service.
+   600→- **Gateway auth** — JWT/API key middleware available in middleware pipeline (disabled in dev, enable in prod).
+   601→- **CORS** — currently wildcard; lock to your frontend domain in production.
+   602→- **Rate limiting** — token-bucket middleware available (100 req/min default, configurable).
+   603→- **Audit logging** — structured audit log middleware captures every request with request ID, timestamp, and response status.
+   604→
+   605→---
+   606→
+   607→## Documentation & Strategic Roadmap
+   608→
+   609→| Document | Path | Description |
+   610→|----------|------|-------------|
+   611→| Strategic Roadmap | `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx` | 6-horizon evolution plan (2025-2035), three-tier analysis, investment framework |
+   612→| Workflow Diagram | `docs/workflow_diagram.mmd` / `.png` | 10-phase operational workflow |
+   613→| Skills Catalogue | `SKILLS.md` | Full capability reference, evolution horizons, data repository map |
+   614→| Technology Deep Dive | `docs/Technology_Deep_Dive_2025-2035.pdf` | Deep-dive on event sourcing, AI/ML, quantum crypto, data repositories, satellite and vision integration |
+   615→| Integration Proof | This file (Preview Endpoint above) | Always-on 10-component frontend-backend health verification |
+   616→
+   617→---
+   618→
+   619→## License
+   620→
+   621→MIT
+   622→
