@@ -19,9 +19,9 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 
 ---
 
-## Current Capabilities (v3.1)
+## Current Capabilities (v3.2)
 
-> **v3.1 changes (Phase 2):** Added strategic roadmap document (`docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx`) with 6-horizon evolution plan, three-tier strategic analysis (current state, competitive positioning, technology trajectory), and investment framework. Enhanced Frontend-Backend Integration Verification section with always-on preview endpoint contract. Updated project documentation to reflect production-ready integration patterns.
+> **v3.2 changes (Phase 4):** Implemented four Horizon 1 capabilities: EU ETS carbon reporting audit domain (6 new queries, 17 total), enhanced satellite AIS ingestion pipeline (provider configs, deduplication, interpolation, PostGIS target), JWT authentication with RBAC roles (5 roles, path-prefix enforcement), Redis-backed distributed rate limiting (aioredis with in-memory fallback). Frontend-status endpoint now tests 14 components. Gateway version bumped to v3.2.
 
 ### 1. Manifest PII Anonymiser (Python)
 
@@ -137,18 +137,14 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 - **Metrics collector** — thread-safe counters, gauges, and histograms with percentile computation (p50, p95, p99)
 - **Service filter** — adds `service` field to all log entries for multi-service log aggregation
 
-### 12. Satellite AIS Ingestion (Python) ★ NEW in v3.0
-
-- **Foundation module** — `shared/satellite_ingest.py` provides the framework for satellite AIS data pipeline
-- **Target architecture** — Apache Kafka for high-throughput ingestion, PostgreSQL with PostGIS for spatial indexing
-- **Compliance use cases** — route deviation detection, AIS gap identification, positional integrity verification
-- **Production target** — multi-provider failover (exactEarth, Spire, ORBCOMM), back-pressure management, error recovery
+- **Finding generator** — `generate_compliance_finding()` stub creates event-bus-ready dicts
+- **Production target** — multi-provider failover, Kafka ingestion, back-pressure management
 
 ### 13. API Gateway + Dashboard (Python FastAPI) ★ UPDATED in v3.1
 
 - **45 REST routes** covering all tools, state machine, event bus, reactions, knowledge graph, composite scoring, query registry
 - **Frontend-Backend Integration Verification** — `GET /api/v1/system/frontend-status` is the **always-on preview endpoint** that confirms frontend-backend and all component communication. This endpoint MUST always feature in README.md and is the single source of truth for integration health.
-- **10-component health contract** — the preview endpoint tests: (1) Database read/write, (2) State Machine definition + callback bridge, (3) Event Bus statistics + transport, (4) Reaction Engine rules + actions, (5) Anonymiser HMAC-SHA256 tokenisation, (6) NER Detector spaCy availability, (7) EDI Auditor rule engine, (8) Remediation decision matrix, (9) MTTR Tracker Go service reachability, (10) End-to-end event flow proof (publishes real event, processes through subscriber pipeline)
+- **14-component health contract** — the preview endpoint tests: (1) Database read/write, (2) State Machine definition + callback bridge, (3) Event Bus statistics + transport, (4) Reaction Engine rules + actions, (5) Anonymiser HMAC-SHA256 tokenisation, (6) NER Detector spaCy availability, (7) EDI Auditor rule engine, (8) Remediation decision matrix, (9) MTTR Tracker Go service reachability, (10) End-to-end event flow proof, (11) Emissions Auditor 6 queries, (12) Satellite AIS 3 providers, (13) JWT Auth 5 RBAC roles, (14) Rate Limiter Redis-ready
 - **Connectivity diagnostic** — `GET /api/v1/system/connectivity` provides per-component latency, status, and detail for all 10 components
 - **State machine bridge** — callback on every successful transition auto-publishes `FINDING_STATE_CHANGED` event with full transition context
 - **State machine to Go MTTR bridge** — async HTTP POST forwards transitions to Go service at `/api/v1/events/sm`

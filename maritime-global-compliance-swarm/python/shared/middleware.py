@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Optional
 
+import jwt as pyjwt
+
 logger = logging.getLogger("middleware")
 
 
@@ -98,14 +100,133 @@ class AuthConfig:
     ])
 
 
+
+# --- RBAC Role Definitions ---
+
+class RBACRole(str, Enum):
+    """Role-based access control roles for the compliance platform."""
+    ADMIN = "admin"
+    COMPLIANCE_OFFICER = "compliance_officer"
+    AUDITOR = "auditor"
+    VIEWER = "viewer"
+    SYSTEM = "system"
+
+
+# Role -> allowed path prefix mappings
+RBAC_PATH_PERMISSIONS: dict[RBACRole, list[str]] = {
+    RBACRole.ADMIN: ["/"],  # Admin has access to everything
+    RBACRole.SYSTEM: ["/"],  # System (internal services) has full access
+    RBACRole.COMPLIANCE_OFFICER: [
+        "/api/v1/audits",
+        "/api/v1/findings",
+        "/api/v1/compliance",
+        "/api/v1/emissions",
+        "/api/v1/reports",
+        "/api/v1/remediation",
+        "/api/v1/edi",
+        "/api/v1/anonymiser",
+        "/api/v1/knowledge-graph",
+    ],
+    RBACRole.AUDITOR: [
+        "/api/v1/audits",
+        "/api/v1/findings",
+        "/api/v1/compliance",
+        "/api/v1/emissions",
+        "/api/v1/reports",
+    ],
+    RBACRole.VIEWER: [
+        "/api/v1/reports",
+        "/api/v1/findings",
+        "/api/v1/compliance",
+        "/api/v1/emissions",
+        "/api/v1/health",
+    ],
+}
+
+
+def _role_has_path_access(role: RBACRole, path: str) -> bool:
+    """Check if a role has permission for the given path."""
+    allowed_prefixes = RBAC_PATH_PERMISSIONS.get(role, [])
+    for prefix in allowed_prefixes:
+        if prefix == "/":
+            return True
+        if path == prefix or path.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def generate_jwt(
+    secret: str,
+    principal: str,
+    role: str,
+    expires_hours: int = 24,
+) -> str:
+    """Generate a JWT token for testing.
+
+    Args:
+        secret: HMAC secret key.
+        principal: User identifier (sub claim).
+        role: RBAC role string (e.g., "admin", "auditor").
+        expires_hours: Token validity duration.
+
+    Returns:
+        Encoded JWT string.
+    """
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": principal,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(hours=expires_hours)).timestamp()),
+    }
+    return pyjwt.encode(payload, secret, algorithm="HS256")
+
+
 class AuthMiddleware(BaseMiddleware):
-    """API key and JWT authentication middleware."""
+    """API key and JWT authentication middleware with RBAC."""
 
     priority = MiddlewarePriority.AUTH
 
     def __init__(self, config: Optional[AuthConfig] = None):
         self.config = config or AuthConfig()
         self.enabled = self.config.enabled
+
+    def _validate_jwt(self, token: str) -> Optional[dict]:
+        """Decode and validate a JWT token. Returns payload or None."""
+        if not self.config.jwt_secret:
+            return None
+        try:
+            payload = pyjwt.decode(
+                token,
+                self.config.jwt_secret,
+                algorithms=[self.config.jwt_algorithm],
+            )
+            return payload
+        except pyjwt.ExpiredSignatureError:
+            logger.warning("JWT token expired")
+            return None
+        except pyjwt.InvalidTokenError as e:
+            logger.warning(f"JWT validation failed: {e}")
+            return None
+
+    def _extract_jwt_from_header(self, headers: dict) -> Optional[str]:
+        """Extract JWT token from Authorization header."""
+        auth_header = headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[7:]
+        return None
+
+    def _extract_role(self, payload: dict) -> Optional[RBACRole]:
+        """Extract RBAC role from JWT payload."""
+        role_str = payload.get("role", "")
+        if not role_str:
+            role_str = payload.get("sub", "")
+        try:
+            return RBACRole(role_str)
+        except ValueError:
+            logger.warning(f"Unknown RBAC role: {role_str}")
+            return None
 
     async def before_request(self, ctx: MiddlewareContext, request: Any) -> Optional[Any]:
         if not self.enabled:
@@ -115,16 +236,51 @@ class AuthMiddleware(BaseMiddleware):
         if ctx.path.startswith("/docs") or ctx.path.startswith("/redoc"):
             return None
 
-        # Check API key
+        from fastapi.responses import JSONResponse
+
+        # Check API key first (backward compatible)
         api_key = ctx.request_headers.get(self.config.api_key_header.lower(), "")
         if api_key and self.config.api_keys:
             if api_key in self.config.api_keys:
                 ctx.auth_principal = f"api-key:{api_key[:8]}..."
                 return None
 
+        # Check JWT token
+        jwt_token = self._extract_jwt_from_header(ctx.request_headers)
+        if jwt_token and self.config.jwt_secret:
+            payload = self._validate_jwt(jwt_token)
+            if payload:
+                principal = payload.get("sub", "unknown")
+                ctx.auth_principal = f"jwt:{principal}"
+                ctx.metadata["jwt_payload"] = payload
+
+                # RBAC check
+                role = self._extract_role(payload)
+                if role and not _role_has_path_access(role, ctx.path):
+                    logger.warning(
+                        f"RBAC denied: role={role.value} path={ctx.path} "
+                        f"principal={principal}"
+                    )
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "detail": f"Role '{role.value}' lacks permission for {ctx.path}",
+                            "error": "FORBIDDEN",
+                        },
+                    )
+                return None
+            else:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or expired token", "error": "INVALID_TOKEN"},
+                )
+
+        # If JWT_SECRET is empty, skip JWT validation (backward compatibility)
+        if not self.config.jwt_secret and not self.config.api_keys:
+            return None
+
         # If auth is enabled but no valid credentials, reject
         if self.enabled and self.config.api_keys:
-            from fastapi.responses import JSONResponse
             logger.warning(f"Auth failed for {ctx.method} {ctx.path} from {ctx.client_ip}")
             return JSONResponse(
                 status_code=401,
@@ -323,6 +479,153 @@ class RequestValidationMiddleware(BaseMiddleware):
 
 
 # ---------------------------------------------------------------------------
+# Redis-backed Distributed Rate Limiting
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RedisRateLimitConfig:
+    """Configuration for Redis-backed distributed rate limiting."""
+    redis_url: str = "redis://localhost:6379/0"
+    key_prefix: str = "mrl:"
+    ttl_seconds: int = 60
+    requests_per_window: int = 100
+    burst_limit: int = 150
+    enabled: bool = True
+
+
+class RedisRateLimitMiddleware(BaseMiddleware):
+    """Token-bucket rate limiting with Redis for multi-instance deployments.
+
+    Uses Redis to store token bucket state with TTL for distributed
+    coordination. Falls back to in-memory if Redis is unavailable.
+    """
+
+    priority = MiddlewarePriority.RATE_LIMIT
+
+    def __init__(self, config: Optional[RedisRateLimitConfig] = None):
+        self.config = config or RedisRateLimitConfig()
+        self.enabled = self.config.enabled
+        self._redis = None
+        self._redis_available = False
+        # In-memory fallback buckets
+        self._fallback_buckets: dict[str, dict[str, float]] = defaultdict(
+            lambda: {
+                "tokens": float(self.config.burst_limit),
+                "last_refill": time.monotonic(),
+            }
+        )
+        self._try_connect_redis()
+
+    def _try_connect_redis(self) -> None:
+        """Attempt to connect to Redis. Logs warning and falls back on failure."""
+        try:
+            import aioredis
+            self._redis = aioredis.from_url(
+                self.config.redis_url,
+                decode_responses=True,
+            )
+            self._redis_available = True
+            logger.info(f"Redis rate limiter connected: {self.config.redis_url}")
+        except Exception as e:
+            self._redis_available = False
+            logger.warning(
+                f"Redis unavailable at {self.config.redis_url}, "
+                f"falling back to in-memory rate limiting. Error: {e}"
+            )
+
+    async def _get_redis_tokens(self, key: str) -> Optional[float]:
+        """Get current token count from Redis."""
+        if not self._redis:
+            return None
+        try:
+            data = await self._redis.hgetall(key)
+            if data:
+                return float(data.get("tokens", 0))
+            return None
+        except Exception:
+            return None
+
+    async def _set_redis_tokens(self, key: str, tokens: float, last_refill: float) -> None:
+        """Store token bucket state in Redis with TTL."""
+        if not self._redis:
+            return
+        try:
+            await self._redis.hset(key, mapping={
+                "tokens": str(tokens),
+                "last_refill": str(last_refill),
+            })
+            await self._redis.expire(key, self.config.ttl_seconds)
+        except Exception as e:
+            logger.warning(f"Redis write error: {e}")
+
+    def _refill_bucket(self, last_refill: float, current_tokens: float) -> tuple[float, float]:
+        """Calculate refilled tokens. Returns (new_tokens, new_last_refill)."""
+        now = time.monotonic()
+        elapsed = now - last_refill
+        refill = (elapsed / self.config.ttl_seconds) * self.config.requests_per_window
+        new_tokens = min(self.config.burst_limit, current_tokens + refill)
+        return new_tokens, now
+
+    async def _check_redis_limit(self, key: str) -> tuple[bool, float]:
+        """Check rate limit using Redis. Returns (allowed, remaining_tokens)."""
+        data = await self._redis.hgetall(key)
+        if data:
+            tokens = float(data.get("tokens", 0))
+            last_refill = float(data.get("last_refill", time.monotonic()))
+            tokens, last_refill = self._refill_bucket(last_refill, tokens)
+            if tokens < 1.0:
+                return False, 0.0
+            tokens -= 1.0
+            await self._set_redis_tokens(key, tokens, last_refill)
+            return True, tokens
+        else:
+            # First request from this client in Redis
+            tokens = self.config.burst_limit - 1.0
+            await self._set_redis_tokens(key, tokens, time.monotonic())
+            return True, tokens
+
+    def _check_memory_limit(self, key: str) -> tuple[bool, float]:
+        """Check rate limit using in-memory fallback."""
+        bucket = self._fallback_buckets[key]
+        tokens, last_refill = self._refill_bucket(bucket["last_refill"], bucket["tokens"])
+        bucket["tokens"] = tokens
+        bucket["last_refill"] = last_refill
+        if tokens < 1.0:
+            return False, 0.0
+        bucket["tokens"] -= 1.0
+        return True, bucket["tokens"]
+
+    async def before_request(self, ctx: MiddlewareContext, request: Any) -> Optional[Any]:
+        if not self.enabled:
+            ctx.rate_limit_remaining = self.config.requests_per_window
+            return None
+
+        from fastapi.responses import JSONResponse
+
+        key = f"{self.config.key_prefix}{ctx.client_ip or 'unknown'}"
+
+        if self._redis_available:
+            allowed, remaining = await self._check_redis_limit(key)
+        else:
+            allowed, remaining = self._check_memory_limit(key)
+
+        if not allowed:
+            ctx.rate_limit_remaining = 0
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Rate limit exceeded. Retry later.",
+                    "error": "RATE_LIMITED",
+                    "retry_after": self.config.ttl_seconds,
+                },
+                headers={"Retry-After": str(self.config.ttl_seconds)},
+            )
+
+        ctx.rate_limit_remaining = int(remaining)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Middleware Pipeline
 # ---------------------------------------------------------------------------
 
@@ -402,8 +705,25 @@ def create_default_pipeline(config: Optional[object] = None) -> MiddlewarePipeli
         auth_config.enabled = getattr(config.auth, "enabled", False)
         auth_config.api_keys = getattr(config.auth, "api_keys", [])
 
+    # Pull security settings if available
+    if config and hasattr(config, "security"):
+        auth_config.jwt_secret = getattr(config.security, "jwt_secret", "")
+        auth_config.jwt_algorithm = getattr(config.security, "jwt_algorithm", "HS256")
+
     pipeline.use(AuthMiddleware(auth_config))
     pipeline.use(RateLimitMiddleware(RateLimitConfig()))
+
+    # Add Redis-backed rate limiter if security config provides Redis URL
+    if config and hasattr(config, "security"):
+        redis_url = getattr(config.security, "redis_rate_limit_url", "")
+        redis_ttl = getattr(config.security, "redis_rate_limit_ttl", 60)
+        if redis_url:
+            redis_config = RedisRateLimitConfig(
+                redis_url=redis_url,
+                ttl_seconds=redis_ttl,
+            )
+            pipeline.use(RedisRateLimitMiddleware(redis_config))
+
     pipeline.use(RequestValidationMiddleware())
     pipeline.use(AuditLogMiddleware())
 

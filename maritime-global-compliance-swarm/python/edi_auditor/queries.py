@@ -25,6 +25,7 @@ class ComplianceDomain(Enum):
     EDI_FORMAT = "edi_format"
     DATA_RETENTION = "data_retention"
     ACCESS_CONTROL = "access_control"
+    EMISSIONS_REPORTING = "emissions_reporting"
 
 
 @dataclass
@@ -424,6 +425,242 @@ QUERY_EXCESSIVE_ACCESS = AuditQuery(
 )
 
 
+# ── 6. Emissions Reporting Checks (EU ETS / IMO DCS) ──────────────────────
+
+QUERY_MISSING_ETS_MONITORING_PLAN = AuditQuery(
+    query_id="AUD-ETS-001",
+    name="Vessels Missing EU ETS Monitoring Reporting Plan",
+    domain=ComplianceDomain.EMISSIONS_REPORTING,
+    description=(
+        "Identifies vessels subject to EU ETS that do not have an approved "
+        "monitoring reporting plan (MRP). Under EU Regulation 2023/959, all "
+        "vessels ≥ 5,000 GT calling at EU ports must submit an MRP."
+    ),
+    sql_template="""
+    SELECT 
+        v.vessel_id,
+        v.imo_number,
+        v.vessel_name,
+        v.gross_tonnage,
+        v.flag_state,
+        v.last_eu_port_call
+    FROM vessels v
+    LEFT JOIN emissions_monitoring_plans emp 
+        ON v.vessel_id = emp.vessel_id 
+        AND emp.plan_status = 'APPROVED'
+        AND emp.reporting_year = EXTRACT(YEAR FROM CURRENT_DATE)
+    WHERE 
+        v.gross_tonnage >= 5000
+        AND v.calls_eu_ports = true
+        AND emp.plan_id IS NULL
+    ORDER BY v.last_eu_port_call DESC
+    LIMIT {batch_size}
+    """.strip(),
+    severity="critical",
+    risk_category="emissions_non_compliance",
+    affected_tables=["vessels", "emissions_monitoring_plans"],
+    parameters={"batch_size": 500},
+    remediation_hint=(
+        "Submit EU ETS Monitoring Reporting Plan to the administering authority. "
+        "Template available at: https://eur-lex.europa.eu. Reference: EU Regulation 2023/959 Art.8"
+    ),
+)
+
+QUERY_EMISSIONS_EXCEEDING_ALLOWANCE = AuditQuery(
+    query_id="AUD-ETS-002",
+    name="Emissions Exceeding Per-Voyage Allowance (MRV)",
+    domain=ComplianceDomain.EMISSIONS_REPORTING,
+    description=(
+        "Detects voyages where reported CO2 emissions exceed the per-voyage "
+        "allowance allocated under the EU ETS MRV framework. Exceedances may "
+        "indicate monitoring errors, fuel quality issues, or unreported deviations."
+    ),
+    sql_template="""
+    SELECT 
+        ev.voyage_id,
+        ev.vessel_id,
+        ev.voyage_number,
+        ev.reported_co2_tonnes,
+        ev.allocated_allowance_tonnes,
+        (ev.reported_co2_tonnes - ev.allocated_allowance_tonnes) AS excess_tonnes,
+        ev.reporting_period,
+        ev.verification_status
+    FROM emissions_voyages ev
+    WHERE 
+        ev.reported_co2_tonnes > ev.allocated_allowance_tonnes
+        AND ev.reporting_period >= DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '1 year'
+        AND (ev.verification_status IS NULL OR ev.verification_status != 'VERIFIED')
+    ORDER BY excess_tonnes DESC
+    LIMIT {batch_size}
+    """.strip(),
+    severity="high",
+    risk_category="emissions_non_compliance",
+    affected_tables=["emissions_voyages"],
+    parameters={"batch_size": 500},
+    remediation_hint=(
+        "Investigate emissions exceedance. Check fuel consumption data quality, "
+        "voyage route deviations, and MRV sensor calibration. "
+        "Reference: EU MRV Regulation 2017/2402"
+    ),
+)
+
+QUERY_MISSING_ETS_ALLOWANCE_CERTIFICATES = AuditQuery(
+    query_id="AUD-ETS-003",
+    name="Missing EU ETS Allowance Certificates for Company",
+    domain=ComplianceDomain.EMISSIONS_REPORTING,
+    description=(
+        "Identifies shipping companies that have not surrendered sufficient "
+        "EU ETS allowance certificates to cover their verified emissions. "
+        "Under EU ETS Phase 4 (2024+), 70% of allowances must be surrendered by 30 Sept."
+    ),
+    sql_template="""
+    SELECT 
+        c.company_id,
+        c.company_name,
+        c.registry_number,
+        ec.verified_emissions_tonnes,
+        ec.surrendered_allowances,
+        (ec.verified_emissions_tonnes * 0.70 - COALESCE(ec.surrendered_allowances, 0)) 
+            AS shortfall_tonnes,
+        ec.reporting_year
+    FROM shipping_companies c
+    JOIN emissions_company_summary ec ON c.company_id = ec.company_id
+    WHERE 
+        ec.reporting_year = EXTRACT(YEAR FROM CURRENT_DATE) - 1
+        AND COALESCE(ec.surrendered_allowances, 0) < (ec.verified_emissions_tonnes * 0.70)
+    ORDER BY shortfall_tonnes DESC
+    LIMIT {batch_size}
+    """.strip(),
+    severity="critical",
+    risk_category="carbon_credit_mismatch",
+    affected_tables=["shipping_companies", "emissions_company_summary"],
+    parameters={"batch_size": 200},
+    remediation_hint=(
+        "Purchase and surrender EU ETS allowances via the Union Registry. "
+        "Deadline: 30 September following the reporting year. "
+        "Penalties: €100/tonne shortfall. Reference: EU ETS Directive 2003/87/EC"
+    ),
+)
+
+QUERY_MISSING_IMO_DCS_FUEL_REPORT = AuditQuery(
+    query_id="AUD-IMO-001",
+    name="IMO DCS Fuel Consumption Not Reported",
+    domain=ComplianceDomain.EMISSIONS_REPORTING,
+    description=(
+        "Finds vessels that have not submitted mandatory IMO Data Collection "
+        "System (DCS) fuel consumption reports. Required under IMO Resolution "
+        "MEPC.278(70) for vessels ≥ 5,000 GT."
+    ),
+    sql_template="""
+    SELECT 
+        v.vessel_id,
+        v.imo_number,
+        v.vessel_name,
+        v.gross_tonnage,
+        v.flag_state,
+        dcs.report_status,
+        dcs.last_submission_date
+    FROM vessels v
+    LEFT JOIN imo_dcs_reports dcs 
+        ON v.imo_number = dcs.imo_number 
+        AND dcs.reporting_year = EXTRACT(YEAR FROM CURRENT_DATE) - 1
+    WHERE 
+        v.gross_tonnage >= 5000
+        AND (dcs.report_id IS NULL OR dcs.report_status = 'NOT_SUBMITTED')
+    ORDER BY v.vessel_name
+    LIMIT {batch_size}
+    """.strip(),
+    severity="high",
+    risk_category="emissions_non_compliance",
+    affected_tables=["vessels", "imo_dcs_reports"],
+    parameters={"batch_size": 500},
+    remediation_hint=(
+        "Submit IMO DCS fuel consumption report via the IMO GHG data collection system. "
+        "Deadline: 31 March following the reporting year. "
+        "Reference: IMO MEPC.278(70), MEPC.333(76)"
+    ),
+)
+
+QUERY_INCOMPLETE_NOX_SOX_DATA = AuditQuery(
+    query_id="AUD-IMO-002",
+    name="Incomplete IMO NOx/SOx Emissions Data (SEEMP)",
+    domain=ComplianceDomain.EMISSIONS_REPORTING,
+    description=(
+        "Detects vessels with incomplete NOx and SOx emissions data in their "
+        "Ship Energy Efficiency Management Plan (SEEMP) reports. Required for "
+        "EEXI/CII compliance tracking under IMO MEPC.364(79)."
+    ),
+    sql_template="""
+    SELECT 
+        v.vessel_id,
+        v.imo_number,
+        v.vessel_name,
+        s.seemp_id,
+        s.reporting_period,
+        CASE WHEN s.nox_emissions_kg IS NULL THEN 'NOx missing' END AS nox_status,
+        CASE WHEN s.sox_emissions_kg IS NULL THEN 'SOx missing' END AS sox_status,
+        CASE WHEN s.fuel_oil_consumption IS NULL THEN 'Fuel consumption missing' END AS fuel_status
+    FROM vessels v
+    JOIN seemp_reports s ON v.imo_number = s.imo_number
+    WHERE 
+        s.reporting_period >= DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '2 years'
+        AND (
+            s.nox_emissions_kg IS NULL 
+            OR s.sox_emissions_kg IS NULL 
+            OR s.fuel_oil_consumption IS NULL
+        )
+    ORDER BY s.reporting_period DESC
+    LIMIT {batch_size}
+    """.strip(),
+    severity="medium",
+    risk_category="emissions_non_compliance",
+    affected_tables=["vessels", "seemp_reports"],
+    parameters={"batch_size": 500},
+    remediation_hint=(
+        "Complete SEEMP emissions data. Install or calibrate NOx/SOx monitoring equipment. "
+        "Reference: IMO MEPC.364(79), MARPOL Annex VI Reg.14"
+    ),
+)
+
+QUERY_CARBON_CREDIT_REGISTRY_SYNC_FAILURES = AuditQuery(
+    query_id="AUD-CRB-001",
+    name="Carbon Credit Registry Sync Failures (EU ETS)",
+    domain=ComplianceDomain.EMISSIONS_REPORTING,
+    description=(
+        "Identifies discrepancies between local emissions records and the EU ETS "
+        "Union Registry. Sync failures may indicate allowance transfer errors, "
+        "registry downtime, or data entry mistakes that could result in compliance gaps."
+    ),
+    sql_template="""
+    SELECT 
+        csr.sync_id,
+        csr.company_id,
+        csr.registry_name,
+        csr.last_sync_at,
+        csr.sync_status,
+        csr.error_details,
+        csr.local_allowance_balance,
+        csr.registry_allowance_balance,
+        ABS(csr.local_allowance_balance - csr.registry_allowance_balance) AS discrepancy
+    FROM carbon_registry_sync csr
+    WHERE 
+        csr.sync_status IN ('FAILED', 'MISMATCH')
+        AND csr.last_sync_at > NOW() - INTERVAL '30 days'
+    ORDER BY discrepancy DESC
+    LIMIT {batch_size}
+    """.strip(),
+    severity="high",
+    risk_category="carbon_credit_mismatch",
+    affected_tables=["carbon_registry_sync"],
+    parameters={"batch_size": 200},
+    remediation_hint=(
+        "Investigate registry sync failure. Verify API credentials, check registry "
+        "availability, and reconcile allowance balances manually if needed. "
+        "Reference: EU ETS Registry Regulation (EU) 2019/1122"
+    ),
+)
+
+
 # ── Query Registry ─────────────────────────────────────────────────────────
 
 ALL_AUDIT_QUERIES: list[AuditQuery] = [
@@ -438,6 +675,12 @@ ALL_AUDIT_QUERIES: list[AuditQuery] = [
     QUERY_RETENTION_VIOLATIONS,
     QUERY_UNANONYMISED_HISTORICAL,
     QUERY_EXCESSIVE_ACCESS,
+    QUERY_MISSING_ETS_MONITORING_PLAN,
+    QUERY_EMISSIONS_EXCEEDING_ALLOWANCE,
+    QUERY_MISSING_ETS_ALLOWANCE_CERTIFICATES,
+    QUERY_MISSING_IMO_DCS_FUEL_REPORT,
+    QUERY_INCOMPLETE_NOX_SOX_DATA,
+    QUERY_CARBON_CREDIT_REGISTRY_SYNC_FAILURES,
 ]
 
 

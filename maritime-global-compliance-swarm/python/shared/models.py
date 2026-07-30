@@ -108,6 +108,8 @@ class RiskCategory(enum.Enum):
     DATA_RETENTION_VIOLATION = "data_retention_violation"
     ACCESS_CONTROL_BREACH = "access_control_breach"
     CERT_EXPIRY = "cert_expiry"
+    EMISSIONS_NON_COMPLIANCE = "emissions_non_compliance"
+    CARBON_CREDIT_MISMATCH = "carbon_credit_mismatch"
 
 
 class FindingState(enum.Enum):

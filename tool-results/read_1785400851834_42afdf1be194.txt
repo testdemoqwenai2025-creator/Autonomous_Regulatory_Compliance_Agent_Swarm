@@ -1,0 +1,1294 @@
+   688→                "status": "ok",
+   689→                "policies": len(REMEDIATION_MATRIX),
+   690→                "detail": f"{len(REMEDIATION_MATRIX)} remediation routes loaded",
+   691→            }
+   692→        except Exception as e:
+   693→            services["remediation"] = {"status": "error", "detail": str(e)[:120]}
+   694→
+   695→        # 9. MTTR Tracker (Go)
+   696→        try:
+   697→            async with httpx.AsyncClient(timeout=3.0) as client:
+   698→                resp = await client.get(f"{_mttr_base_url}/health")
+   699→                go_detail = resp.json() if resp.status_code == 200 else {}
+   700→                services["mttr_tracker"] = {
+   701→                    "status": "ok" if resp.status_code == 200 else "degraded",
+   702→                    "detail": f"Go service at {_mttr_base_url}",
+   703→                    "go_status": go_detail.get("status", "unknown"),
+   704→                }
+   705→        except Exception as e:
+   706→            services["mttr_tracker"] = {
+   707→                "status": "unavailable",
+   708→                "detail": f"Cannot reach Go MTTR tracker at {_mttr_base_url}",
+   709→            }
+   710→
+   711→        # 10. End-to-end event flow proof
+   712→        try:
+   713→            test_event = _event_bus.publish(
+   714→                EventType.SYSTEM_HEALTH_CHANGED,
+   715→                payload={"probe": True, "source": "frontend-status"},
+   716→                source="frontend_status_endpoint",
+   717→            )
+   718→            _event_bus.process_pending()
+   719→            services["event_flow"] = {
+   720→                "status": "ok",
+   721→                "detail": f"Published event {test_event.event_id[:8]}... and processed through subscriber pipeline",
+   722→            }
+   723→        except Exception as e:
+   724→            services["event_flow"] = {"status": "error", "detail": str(e)[:120]}
+   725→
+   726→        all_ok = all(
+   727→            s.get("status") in ("ok", "degraded")
+   728→            for s in services.values()
+   729→            if s.get("status") != "unavailable"  # MTTR unavailable is ok in dev
+   730→        )
+   731→        all_ok = all_ok and services.get("database", {}).get("status") == "ok"
+   732→
+   733→        return {
+   734→            "status": "operational" if all_ok else "degraded",
+   735→            "timestamp": ts,
+   736→            "gateway_version": "3.1.0",
+   737→            "services": services,
+   738→        }
+   739→
+   740→
+   741→# ══════════════════════════════════════════════════════════════════════════
+   742→#  1. PII ANONYMISER
+   743→# ══════════════════════════════════════════════════════════════════════════
+   744→
+   745→def _register_anonymiser_routes(app: FastAPI):
+   746→
+   747→    @app.post(
+   748→        "/api/v1/anonymise/manifest",
+   749→        response_model=ManifestAnonymiseResponse,
+   750→        responses={500: {"model": ErrorResponse}},
+   751→        tags=["1. PII Anonymiser"],
+   752→    )
+   753→    async def anonymise_manifest(req: ManifestAnonymiseRequest):
+   754→        """Tokenise all PII fields in a shipping manifest.
+   755→
+   756→        Accepts a raw manifest dict and replaces PII fields with
+   757→        deterministic HMAC-SHA256 tokens. Anonymisation records are
+   758→        persisted to the database for audit trail.
+   759→        """
+   760→        anonymised = _anonymiser.anonymise_manifest(req.manifest, req.manifest_id)
+   761→
+   762→        # Also anonymise any free-text fields
+   763→        for ft_key in req.free_text_fields:
+   764→            if ft_key in anonymised and isinstance(anonymised[ft_key], str):
+   765→                anonymised[ft_key] = _anonymiser.anonymise_free_text(
+   766→                    anonymised[ft_key], req.manifest_id
+   767→                )
+   768→
+   769→        # Persist records to DB
+   770→        records = _anonymiser.flush_records()
+   771→        persisted = []
+   772→        with _session_factory() as session:
+   773→            for rec in records:
+   774→                db_rec = AnonymisationRecord(
+   775→                    manifest_id=rec["manifest_id"],
+   776→                    field_name=rec["field_name"],
+   777→                    field_category=rec["field_category"],
+   778→                    original_hash=rec["original_hash"],
+   779→                    token=rec["token"],
+   780→                )
+   781→                session.add(db_rec)
+   782→                persisted.append(AnonymisedField(
+   783→                    field_name=rec["field_name"],
+   784→                    field_category=rec["field_category"].value,
+   785→                    token=rec["token"],
+   786→                    original_hash=rec["original_hash"],
+   787→                ))
+   788→
+   789→        return ManifestAnonymiseResponse(
+   790→            manifest_id=req.manifest_id,
+   791→            anonymised_manifest=anonymised,
+   792→            fields_processed=len(persisted),
+   793→            records=persisted,
+   794→        )
+   795→
+   796→    @app.post(
+   797→        "/api/v1/anonymise/free-text",
+   798→        response_model=FreeTextAnonymiseResponse,
+   799→        responses={500: {"model": ErrorResponse}},
+   800→        tags=["1. PII Anonymiser"],
+   801→    )
+   802→    async def anonymise_free_text(req: FreeTextAnonymiseRequest):
+   803→        """Detect and tokenise PII patterns in free-text content.
+   804→
+   805→        Scans for email addresses, phone numbers, passport numbers,
+   806→        and tax IDs, replacing matches with deterministic tokens.
+   807→        """
+   808→        result = _anonymiser.anonymise_free_text(req.text, req.manifest_id)
+   809→        records = _anonymiser.flush_records()
+   810→
+   811→        persisted = []
+   812→        with _session_factory() as session:
+   813→            for rec in records:
+   814→                db_rec = AnonymisationRecord(
+   815→                    manifest_id=rec["manifest_id"],
+   816→                    field_name=rec["field_name"],
+   817→                    field_category=rec["field_category"],
+   818→                    original_hash=rec["original_hash"],
+   819→                    token=rec["token"],
+   820→                )
+   821→                session.add(db_rec)
+   822→                persisted.append(AnonymisedField(
+   823→                    field_name=rec["field_name"],
+   824→                    field_category=rec["field_category"].value,
+   825→                    token=rec["token"],
+   826→                    original_hash=rec["original_hash"],
+   827→                ))
+   828→
+   829→        return FreeTextAnonymiseResponse(
+   830→            manifest_id=req.manifest_id,
+   831→            anonymised_text=result,
+   832→            patterns_found=len(persisted),
+   833→            records=persisted,
+   834→        )
+   835→
+   836→    @app.post(
+   837→        "/api/v1/anonymise/scan",
+   838→        response_model=ScanResponse,
+   839→        responses={500: {"model": ErrorResponse}},
+   840→        tags=["1. PII Anonymiser"],
+   841→    )
+   842→    async def scan_manifest(req: ScanRequest):
+   843→        """Scan a manifest for PII fields without modifying data.
+   844→
+   845→        Returns all matching PII rules grouped by field name.
+   846→        Supports jurisdiction filtering (GDPR, CCPA, LGPD, PDPA, PIPA).
+   847→        """
+   848→        jurisdiction = req.jurisdiction.value if req.jurisdiction else None
+   849→        field_rules = _rule_engine.get_fields_for_manifest(req.manifest, jurisdiction)
+   850→
+   851→        matches: dict[str, list[ScanMatch]] = {}
+   852→        for field_name, rules in field_rules.items():
+   853→            matches[field_name] = [
+   854→                ScanMatch(
+   855→                    field_name=field_name,
+   856→                    category=r.category,
+   857→                    description=r.description,
+   858→                    mandatory=r.mandatory,
+   859→                    retention_max_days=r.retention_max_days,
+   860→                    jurisdictions=[j.value for j in r.jurisdictions],
+   861→                )
+   862→                for r in rules
+   863→            ]
+   864→
+   865→        return ScanResponse(
+   866→            total_fields=len(req.manifest),
+   867→            pii_fields_found=len(matches),
+   868→            matches=matches,
+   869→        )
+   870→
+   871→
+   872→# ══════════════════════════════════════════════════════════════════════════
+   873→#  1B. NER-BASED PII DETECTION (ML layer)
+   874→# ══════════════════════════════════════════════════════════════════════════
+   875→
+   876→def _register_ner_routes(app: FastAPI):
+   877→
+   878→    @app.post(
+   879→        "/api/v1/anonymise/ner/scan",
+   880→        response_model=NERScanResponse,
+   881→        tags=["1b. NER PII Detection"],
+   882→    )
+   883→    async def ner_scan(req: NERScanRequest):
+   884→        """Scan text with NER for PII entity detection.
+   885→
+   886→        Runs multi-layer NER (maritime patterns, multi-script person names,
+   887→        organisation patterns, and spaCy if available). Returns all detected
+   888→        entities with positions, labels, and confidence scores.
+   889→        """
+   890→        if req.pii_only:
+   891→            entities = _ner_detector.detect_pii_entities(req.text)
+   892→        else:
+   893→            entities = _ner_detector.detect(req.text)
+   894→
+   895→        return NERScanResponse(
+   896→            text_length=len(req.text),
+   897→            entities_found=len(entities),
+   898→            layers_used=_ner_detector.layers_available,
+   899→            spacy_available=_ner_detector.spacy_available,
+   900→            entities=[
+   901→                NEREntitySchema(
+   902→                    text=e.text,
+   903→                    label=e.label,
+   904→                    category=e.category,
+   905→                    start=e.start,
+   906→                    end=e.end,
+   907→                    confidence=e.confidence,
+   908→                    source=e.source,
+   909→                )
+   910→                for e in entities
+   911→            ],
+   912→        )
+   913→
+   914→    @app.post(
+   915→        "/api/v1/anonymise/ner/anonymise",
+   916→        response_model=NERAnonymiseResponse,
+   917→        tags=["1b. NER PII Detection"],
+   918→    )
+   919→    async def ner_anonymise(req: NERAnonymiseRequest):
+   920→        """Anonymise free-text using NER-detected PII entities.
+   921→
+   922→        Detects PERSON and ORG entities via NER and replaces them
+   923→        with HMAC-SHA256 tokens. Records are persisted to the database.
+   924→        """
+   925→        anonymised_text, records = _ner_detector.anonymise_text_with_ner(
+   926→            text=req.text,
+   927→            tokeniser=_anonymiser,
+   928→            manifest_id=req.manifest_id,
+   929→        )
+   930→
+   931→        # Persist records
+   932→        persisted = []
+   933→        with _session_factory() as session:
+   934→            for rec in records:
+   935→                db_rec = AnonymisationRecord(
+   936→                    manifest_id=req.manifest_id,
+   937→                    field_name=rec["field_name"],
+   938→                    field_category=PIIFieldCategory.CONTACT_INFO,
+   939→                    original_hash=_anonymiser._vault.hash_original(rec["text"]),
+   940→                    token=rec["token"],
+   941→                )
+   942→                session.add(db_rec)
+   943→                persisted.append(rec)
+   944→
+   945→        return NERAnonymiseResponse(
+   946→            manifest_id=req.manifest_id,
+   947→            anonymised_text=anonymised_text,
+   948→            entities_replaced=len(persisted),
+   949→            records=persisted,
+   950→        )
+   951→
+   952→
+   953→# ══════════════════════════════════════════════════════════════════════════
+   954→#  2. EDI SQL AUDITOR
+   955→# ══════════════════════════════════════════════════════════════════════════
+   956→
+   957→def _register_auditor_routes(app: FastAPI):
+   958→
+   959→    @app.post(
+   960→        "/api/v1/audit/run",
+   961→        response_model=RunAuditResponse,
+   962→        responses={500: {"model": ErrorResponse}},
+   963→        tags=["2. EDI SQL Auditor"],
+   964→    )
+   965→    async def run_audit(req: RunAuditRequest):
+   966→        """Execute compliance audit queries against the FMS database.
+   967→
+   968→        Runs 11 parametric SQL queries across 5 compliance domains:
+   969→        encryption, customs documentation, EDI format, data retention,
+   970→        and access control. Results are persisted as AuditFindings.
+   971→        """
+   972→        domain = None
+   973→        if req.domain:
+   974→            domain = ComplianceDomain(req.domain.value)
+   975→
+   976→        min_sev = req.min_severity.value if req.min_severity else None
+   977→
+   978→        findings = _auditor.run_audit(domain=domain, min_severity=min_sev)
+   979→
+   980→        return RunAuditResponse(
+   981→            queries_executed=len(ALL_AUDIT_QUERIES),
+   982→            findings_count=len(findings),
+   983→            findings=[
+   984→                AuditFindingSummary(
+   985→                    finding_ref=f.get("finding_ref", ""),
+   986→                    severity=f.get("severity", ""),
+   987→                    affected_row_count=f.get("affected_row_count", 0),
+   988→                    title=f.get("title", ""),
+   989→                    query_id=f.get("query_id"),
+   990→                    error=f.get("error"),
+   991→                )
+   992→                for f in findings
+   993→            ],
+   994→        )
+   995→
+   996→    @app.get(
+   997→        "/api/v1/audit/profiles",
+   998→        response_model=list[ProfileComplianceInfo],
+   999→        responses={500: {"model": ErrorResponse}},
+  1000→        tags=["2. EDI SQL Auditor"],
+  1001→    )
+  1002→    async def audit_edi_profiles():
+  1003→        """Audit all EDI connection profiles for encryption compliance.
+  1004→
+  1005→        Checks each registered partner connection for encryption
+  1006→        status, TLS version, and last successful audit timestamp.
+  1007→        """
+  1008→        profiles = _auditor.audit_edi_profiles()
+  1009→        return [
+  1010→            ProfileComplianceInfo(
+  1011→                partner_id=p["partner_id"],
+  1012→                partner_name=p["partner_name"],
+  1013→                edi_standard=p["edi_standard"],
+  1014→                encryption_enabled=p["encryption_enabled"],
+  1015→                encryption_protocol=p["encryption_protocol"],
+  1016→                issues=p["issues"],
+  1017→                last_audit_at=p["last_audit_at"],
+  1018→                compliant=p["compliant"],
+  1019→            )
+  1020→            for p in profiles
+  1021→        ]
+  1022→
+  1023→    @app.get(
+  1024→        "/api/v1/audit/queries",
+  1025→        response_model=list[AuditQueryInfo],
+  1026→        tags=["2. EDI SQL Auditor"],
+  1027→    )
+  1028→    async def list_audit_queries(
+  1029→        domain: Optional[str] = Query(None, description="Filter by domain"),
+  1030→    ):
+  1031→        """List all available audit queries with metadata.
+  1032→
+  1033→        Returns query IDs, descriptions, severity levels, and
+  1034→        remediation hints for each of the 11 audit queries.
+  1035→        """
+  1036→        if domain:
+  1037→            queries = get_queries_by_domain(ComplianceDomain(domain))
+  1038→        else:
+  1039→            queries = ALL_AUDIT_QUERIES
+  1040→
+  1041→        return [
+  1042→            AuditQueryInfo(
+  1043→                query_id=q.query_id,
+  1044→                name=q.name,
+  1045→                domain=q.domain.value,
+  1046→                severity=q.severity,
+  1047→                risk_category=q.risk_category,
+  1048→                affected_tables=q.affected_tables,
+  1049→                description=q.description,
+  1050→                remediation_hint=q.remediation_hint,
+  1051→            )
+  1052→            for q in queries
+  1053→        ]
+  1054→
+  1055→
+  1056→# ══════════════════════════════════════════════════════════════════════════
+  1057→#  2B. QUERY REGISTRY (pluggable, versioned, DB-backed)
+  1058→# ══════════════════════════════════════════════════════════════════════════
+  1059→
+  1060→def _register_registry_routes(app: FastAPI):
+  1061→
+  1062→    @app.get(
+  1063→        "/api/v1/audit/registry/queries",
+  1064→        response_model=list[RegistryQueryInfo],
+  1065→        tags=["2b. Query Registry"],
+  1066→    )
+  1067→    async def registry_list(
+  1068→        domain: Optional[str] = Query(None),
+  1069→        include_inactive: bool = Query(False),
+  1070→    ):
+  1071→        """List queries from the pluggable registry.
+  1072→
+  1073→        Returns all active queries (or all including inactive) from
+  1074→        the database-backed registry. Supports domain filtering.
+  1075→        """
+  1076→        queries = _query_registry.get_active_queries(domain=domain)
+  1077→        if not include_inactive:
+  1078→            queries = [q for q in queries if q.get("is_active", True)]
+  1079→        return [RegistryQueryInfo(**q) for q in queries]
+  1080→
+  1081→    @app.get(
+  1082→        "/api/v1/audit/registry/queries/{query_id}",
+  1083→        response_model=RegistryQueryInfo,
+  1084→        responses={404: {"model": ErrorResponse}},
+  1085→        tags=["2b. Query Registry"],
+  1086→    )
+  1087→    async def registry_get(query_id: str):
+  1088→        """Get the active version of a specific query from the registry."""
+  1089→        q = _query_registry.get_query(query_id)
+  1090→        if not q:
+  1091→            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found or inactive")
+  1092→        return RegistryQueryInfo(**q)
+  1093→
+  1094→    @app.get(
+  1095→        "/api/v1/audit/registry/queries/{query_id}/versions",
+  1096→        response_model=list[RegistryQueryInfo],
+  1097→        tags=["2b. Query Registry"],
+  1098→    )
+  1099→    async def registry_versions(query_id: str):
+  1100→        """Get all versions of a specific query.
+  1101→
+  1102→        Useful for comparing regulatory changes across versions.
+  1103→        """
+  1104→        versions = _query_registry.get_query_versions(query_id)
+  1105→        if not versions:
+  1106→            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
+  1107→        return [RegistryQueryInfo(**v) for v in versions]
+  1108→
+  1109→    @app.post(
+  1110→        "/api/v1/audit/registry/queries",
+  1111→        response_model=RegistryQueryInfo,
+  1112→        responses={409: {"model": ErrorResponse}},
+  1113→        tags=["2b. Query Registry"],
+  1114→    )
+  1115→    async def registry_create(req: CreateQueryRequest):
+  1116→        """Create a new audit query in the registry.
+  1117→
+  1118→        The query is immediately available for audit runs.
+  1119→        Version auto-increments if query_id already exists.
+  1120→        """
+  1121→        try:
+  1122→            result = _query_registry.create_query(
+  1123→                data=req.model_dump(),
+  1124→                created_by="api",
+  1125→            )
+  1126→            return RegistryQueryInfo(**result)
+  1127→        except Exception as e:
+  1128→            raise HTTPException(status_code=400, detail=str(e))
+  1129→
+  1130→    @app.put(
+  1131→        "/api/v1/audit/registry/queries/{query_id}",
+  1132→        response_model=RegistryQueryInfo,
+  1133→        responses={404: {"model": ErrorResponse}},
+  1134→        tags=["2b. Query Registry"],
+  1135→    )
+  1136→    async def registry_update(query_id: str, req: UpdateQueryRequest):
+  1137→        """Update an existing query (creates a new version).
+  1138→
+  1139→        The old active version is deactivated. A new version is created
+  1140→        with the merged fields. This enables regulatory change tracking.
+  1141→        """
+  1142→        updates = {k: v for k, v in req.model_dump().items() if v is not None}
+  1143→        result = _query_registry.update_query(
+  1144→            query_id=query_id,
+  1145→            data=updates,
+  1146→            updated_by="api",
+  1147→        )
+  1148→        if not result:
+  1149→            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
+  1150→        return RegistryQueryInfo(**result)
+  1151→
+  1152→    @app.delete(
+  1153→        "/api/v1/audit/registry/queries/{query_id}",
+  1154→        tags=["2b. Query Registry"],
+  1155→    )
+  1156→    async def registry_retire(query_id: str):
+  1157→        """Retire (deactivate) a query from the registry.
+  1158→
+  1159→        The query is soft-deleted — it remains in the database for
+  1160→        historical reference but will not be used in audit runs.
+  1161→        """
+  1162→        retired = _query_registry.retire_query(query_id)
+  1163→        if not retired:
+  1164→            raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
+  1165→        return {"status": "retired", "query_id": query_id}
+  1166→
+  1167→    @app.get(
+  1168→        "/api/v1/audit/registry/stats",
+  1169→        response_model=RegistryStatsResponse,
+  1170→        tags=["2b. Query Registry"],
+  1171→    )
+  1172→    async def registry_stats():
+  1173→        """Get statistics about the query registry.
+  1174→
+  1175→        Returns counts of total, active, builtin, and custom queries,
+  1176→        broken down by domain.
+  1177→        """
+  1178→        stats = _query_registry.get_statistics()
+  1179→        return RegistryStatsResponse(
+  1180→            total_queries=stats["total_queries"],
+  1181→            active_queries=stats["active_queries"],
+  1182→            builtin_queries=stats["builtin_queries"],
+  1183→            custom_queries=stats["custom_queries"],
+  1184→            by_domain=stats["by_domain"],
+  1185→        )
+  1186→
+  1187→    @app.post(
+  1188→        "/api/v1/audit/registry/seed",
+  1189→        response_model=SeedRegistryResponse,
+  1190→        tags=["2b. Query Registry"],
+  1191→    )
+  1192→    async def registry_seed():
+  1193→        """Seed the registry with the 11 default audit queries.
+  1194→
+  1195→        Only inserts if the registry is empty. Safe to call multiple times.
+  1196→        """
+  1197→        count = _query_registry.seed_defaults()
+  1198→        if count == 0:
+  1199→            return SeedRegistryResponse(queries_seeded=0, message="Registry already populated")
+  1200→        return SeedRegistryResponse(queries_seeded=count, message=f"Seeded {count} default queries")
+  1201→
+  1202→
+  1203→# ══════════════════════════════════════════════════════════════════════════
+  1204→#  3. REMEDIATION ROUTE GENERATOR
+  1205→# ══════════════════════════════════════════════════════════════════════════
+  1206→
+  1207→def _register_remediation_routes(app: FastAPI):
+  1208→
+  1209→    @app.post(
+  1210→        "/api/v1/remediation/policies",
+  1211→        response_model=GeneratePoliciesResponse,
+  1212→        responses={500: {"model": ErrorResponse}},
+  1213→        tags=["3. Remediation Generator"],
+  1214→    )
+  1215→    async def generate_policies(req: GeneratePoliciesRequest):
+  1216→        """Generate remediation masking policies from open audit findings.
+  1217→
+  1218→        Analyses each open finding, applies the decision matrix to map
+  1219→        risk categories to policy actions, and creates MaskingPolicy records.
+  1220→
+  1221→        Modes:
+  1222→          - dry-run: Propose policies without persisting
+  1223→          - staged:  Persist as disabled (manual review)
+  1224→          - apply:   Persist and enable immediately
+  1225→        """
+  1226→        results = _policy_generator.generate_policies(
+  1227→            finding_refs=req.finding_refs,
+  1228→            mode=req.mode.value,
+  1229→        )
+  1230→
+  1231→        return GeneratePoliciesResponse(
+  1232→            findings_processed=len([r for r in results if r.get("finding_ref")]),
+  1233→            policies_generated=len(results),
+  1234→            mode=req.mode.value,
+  1235→            policies=[
+  1236→                GeneratedPolicy(
+  1237→                    policy_id=r.get("policy_id"),
+  1238→                    name=r["name"],
+  1239→                    action=r.get("action"),
+  1240→                    enabled=r.get("enabled"),
+  1241→                    status=r.get("status", "unknown"),
+  1242→                    mode=r.get("mode", req.mode.value),
+  1243→                    finding_ref=r.get("finding_ref"),
+  1244→                    severity=r.get("severity"),
+  1245→                )
+  1246→                for r in results
+  1247→            ],
+  1248→        )
+  1249→
+  1250→    @app.post(
+  1251→        "/api/v1/remediation/edi-profiles",
+  1252→        response_model=UpdateEDIResponse,
+  1253→        responses={500: {"model": ErrorResponse}},
+  1254→        tags=["3. Remediation Generator"],
+  1255→    )
+  1256→    async def update_edi_profiles(req: UpdateEDIRequest):
+  1257→        """Update EDI connection profiles based on audit findings.
+  1258→
+  1259→        Finds profiles flagged by the auditor and applies security
+  1260→        updates (e.g., enforce TLS 1.3, enable encryption).
+  1261→        """
+  1262→        results = _edi_updater.update_profiles(
+  1263→            finding_refs=req.finding_refs,
+  1264→            mode=req.mode.value,
+  1265→        )
+  1266→
+  1267→        return UpdateEDIResponse(
+  1268→            profiles_processed=len(results),
+  1269→            mode=req.mode.value,
+  1270→            results=[
+  1271→                ProfileUpdateResult(
+  1272→                    partner_id=r["partner_id"],
+  1273→                    partner_name=r.get("partner_name"),
+  1274→                    action=r["action"],
+  1275→                    changes={
+  1276→                        k: ProfileChange(from_value=v["from"], to_value=v["to"])
+  1277→                        for k, v in r.get("changes", {}).items()
+  1278→                    },
+  1279→                    mode=r.get("mode", req.mode.value),
+  1280→                )
+  1281→                for r in results
+  1282→            ],
+  1283→        )
+  1284→
+  1285→
+  1286→# ══════════════════════════════════════════════════════════════════════════
+  1287→#  4. MTTR TRACKER (proxy to Golang service)
+  1288→# ══════════════════════════════════════════════════════════════════════════
+  1289→
+  1290→def _register_mttr_routes(app: FastAPI):
+  1291→
+  1292→    @app.post(
+  1293→        "/api/v1/mttr/events",
+  1294→        responses={
+  1295→            201: {"description": "Event recorded"},
+  1296→            400: {"model": ErrorResponse},
+  1297→            502: {"model": ErrorResponse},
+  1298→        },
+  1299→        tags=["4. MTTR Tracker"],
+  1300→    )
+  1301→    async def ingest_event(req: IngestEventRequest):
+  1302→        """Record a telemetry event for MTTR tracking.
+  1303→
+  1304→        Proxies to the Golang MTTR tracker service. Events track
+  1305→        the lifecycle of a finding through phases:
+  1306→        identified -> assigned -> in_progress -> resolved -> verified
+  1307→        """
+  1308→        try:
+  1309→            async with httpx.AsyncClient(timeout=10.0) as client:
+  1310→                resp = await client.post(
+  1311→                    f"{_mttr_base_url}/api/v1/events",
+  1312→                    json=req.model_dump(),
+  1313→                )
+  1314→                if resp.status_code != 201:
+  1315→                    raise HTTPException(
+  1316→                        status_code=resp.status_code,
+  1317→                        detail=resp.text,
+  1318→                    )
+  1319→                return resp.json()
+  1320→        except httpx.ConnectError:
+  1321→            raise HTTPException(
+  1322→                status_code=502,
+  1323→                detail=f"MTTR tracker unavailable at {_mttr_base_url}",
+  1324→            )
+  1325→
+  1326→    @app.get(
+  1327→        "/api/v1/mttr/findings/{finding_id}",
+  1328→        response_model=FindingMTTRResponse,
+  1329→        responses={404: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
+  1330→        tags=["4. MTTR Tracker"],
+  1331→    )
+  1332→    async def get_finding_mttr(finding_id: str):
+  1333→        """Get MTTR timeline and metrics for a specific finding.
+  1334→
+  1335→        Returns all lifecycle events and the computed MTTR in hours.
+  1336→        """
+  1337→        try:
+  1338→            async with httpx.AsyncClient(timeout=10.0) as client:
+  1339→                resp = await client.get(
+  1340→                    f"{_mttr_base_url}/api/v1/findings/{finding_id}"
+  1341→                )
+  1342→                if resp.status_code != 200:
+  1343→                    raise HTTPException(
+  1344→                        status_code=resp.status_code,
+  1345→                        detail=resp.text,
+  1346→                    )
+  1347→                data = resp.json()
+  1348→                return FindingMTTRResponse(
+  1349→                    finding_id=data["finding_id"],
+  1350→                    mttr_hours=data.get("mttr_hours"),
+  1351→                    event_count=data.get("event_count", 0),
+  1352→                    events=[
+  1353→                        MTTRTimelineEvent(
+  1354→                            id=e.get("id", ""),
+  1355→                            finding_id=e.get("finding_id", ""),
+  1356→                            phase=e.get("phase", ""),
+  1357→                            timestamp=e.get("timestamp", ""),
+  1358→                            assignee=e.get("assignee"),
+  1359→                            duration_seconds=e.get("duration_seconds"),
+  1360→                        )
+  1361→                        for e in data.get("events", [])
+  1362→                    ],
+  1363→                )
+  1364→        except httpx.ConnectError:
+  1365→            raise HTTPException(
+  1366→                status_code=502,
+  1367→                detail=f"MTTR tracker unavailable at {_mttr_base_url}",
+  1368→            )
+  1369→
+  1370→    @app.get(
+  1371→        "/api/v1/mttr/report",
+  1372→        response_model=MTTRReportResponse,
+  1373→        responses={502: {"model": ErrorResponse}},
+  1374→        tags=["4. MTTR Tracker"],
+  1375→    )
+  1376→    async def get_mttr_report(
+  1377→        from_date: Optional[str] = Query(None, description="ISO 8601 start (e.g. 2025-01-01T00:00:00Z)"),
+  1378→        to_date: Optional[str] = Query(None, description="ISO 8601 end"),
+  1379→        risk_category: Optional[str] = Query(None, description="Filter by risk category"),
+  1380→    ):
+  1381→        """Get aggregate MTTR report with avg and P95 metrics.
+  1382→
+  1383→        Optionally filter by time range and risk category.
+  1384→        Proxied to the Golang MTTR tracker.
+  1385→        """
+  1386→        try:
+  1387→            params = {}
+  1388→            if from_date:
+  1389→                params["from"] = from_date
+  1390→            if to_date:
+  1391→                params["to"] = to_date
+  1392→            if risk_category:
+  1393→                params["risk_category"] = risk_category
+  1394→
+  1395→            async with httpx.AsyncClient(timeout=10.0) as client:
+  1396→                resp = await client.get(
+  1397→                    f"{_mttr_base_url}/api/v1/mttr/report",
+  1398→                    params=params,
+  1399→                )
+  1400→                if resp.status_code != 200:
+  1401→                    raise HTTPException(
+  1402→                        status_code=resp.status_code,
+  1403→                        detail=resp.text,
+  1404→                    )
+  1405→                data = resp.json()
+  1406→                return MTTRReportResponse(
+  1407→                    total_findings=data.get("total_findings", 0),
+  1408→                    avg_mttr_hours=data.get("avg_mttr_hours", 0.0),
+  1409→                    p95_mttr_hours=data.get("p95_mttr_hours", 0.0),
+  1410→                    by_severity=data.get("by_severity", {}),
+  1411→                    by_risk_category=data.get("by_risk_category", {}),
+  1412→                    period_from=from_date,
+  1413→                    period_to=to_date,
+  1414→                )
+  1415→        except httpx.ConnectError:
+  1416→            raise HTTPException(
+  1417→                status_code=502,
+  1418→                detail=f"MTTR tracker unavailable at {_mttr_base_url}",
+  1419→            )
+  1420→
+  1421→    @app.get(
+  1422→        "/api/v1/mttr/open",
+  1423→        response_model=list[OpenFindingMTTR],
+  1424→        responses={502: {"model": ErrorResponse}},
+  1425→        tags=["4. MTTR Tracker"],
+  1426→    )
+  1427→    async def get_open_findings_mttr():
+  1428→        """Get all open findings with their current MTTR metrics.
+  1429→
+  1430→        Useful for dashboard views showing aging findings.
+  1431→        """
+  1432→        try:
+  1433→            async with httpx.AsyncClient(timeout=10.0) as client:
+  1434→                resp = await client.get(
+  1435→                    f"{_mttr_base_url}/api/v1/mttr/open"
+  1436→                )
+  1437→                if resp.status_code != 200:
+  1438→                    raise HTTPException(
+  1439→                        status_code=resp.status_code,
+  1440→                        detail=resp.text,
+  1441→                    )
+  1442→                data = resp.json()
+  1443→                return [
+  1444→                    OpenFindingMTTR(
+  1445→                        finding_id=f.get("finding_id", ""),
+  1446→                        finding_ref=f.get("finding_ref", ""),
+  1447→                        severity=f.get("severity", ""),
+  1448→                        risk_category=f.get("risk_category", ""),
+  1449→                        title=f.get("title", ""),
+  1450→                        mttr_hours=f.get("mttr_hours", 0.0),
+  1451→                        current_phase=f.get("current_phase", ""),
+  1452→                        age_hours=f.get("age_hours", 0.0),
+  1453→                    )
+  1454→                    for f in data
+  1455→                ]
+  1456→        except httpx.ConnectError:
+  1457→            raise HTTPException(
+  1458→                status_code=502,
+  1459→                detail=f"MTTR tracker unavailable at {_mttr_base_url}",
+  1460→            )
+  1461→
+  1462→
+  1463→# ══════════════════════════════════════════════════════════════════════════
+  1464→#  SHARED QUERY ENDPOINTS (findings, policies, reports)
+  1465→# ══════════════════════════════════════════════════════════════════════════
+  1466→
+  1467→def _register_query_routes(app: FastAPI):
+  1468→
+  1469→    @app.get(
+  1470→        "/api/v1/findings",
+  1471→        response_model=FindingsListResponse,
+  1472→        tags=["findings"],
+  1473→    )
+  1474→    async def list_findings(
+  1475→        severity: Optional[str] = Query(None),
+  1476→        status: Optional[str] = Query(None),
+  1477→        risk_category: Optional[str] = Query(None),
+  1478→        limit: int = Query(50, ge=1, le=500),
+  1479→        offset: int = Query(0, ge=0),
+  1480→    ):
+  1481→        """List audit findings with optional filtering.
+  1482→
+  1483→        Query all findings from the compliance database, filtered by
+  1484→        severity, status, or risk category. Supports pagination.
+  1485→        """
+  1486→        with _session_factory() as session:
+  1487→            query = session.query(AuditFinding)
+  1488→            if severity:
+  1489→                try:
+  1490→                    sev_enum = AuditSeverity(severity)
+  1491→                    query = query.filter(AuditFinding.severity == sev_enum)
+  1492→                except ValueError:
+  1493→                    pass
+  1494→            if status:
+  1495→                try:
+  1496→                    stat_enum = AuditStatus(status)
+  1497→                    query = query.filter(AuditFinding.status == stat_enum)
+  1498→                except ValueError:
+  1499→                    pass
+  1500→            if risk_category:
+  1501→                try:
+  1502→                    risk_enum = RiskCategory(risk_category)
+  1503→                    query = query.filter(AuditFinding.risk_category == risk_enum)
+  1504→                except ValueError:
+  1505→                    pass
+  1506→
+  1507→            total = query.count()
+  1508→            findings = query.order_by(AuditFinding.detected_at.desc()).offset(offset).limit(limit).all()
+  1509→
+  1510→            return FindingsListResponse(
+  1511→                total=total,
+  1512→                findings=[
+  1513→                    {
+  1514→                        "id": f.id,
+  1515→                        "finding_ref": f.finding_ref,
+  1516→                        "severity": f.severity.value if f.severity else None,
+  1517→                        "status": f.status.value if f.status else None,
+  1518→                        "state": f.state.value if f.state else None,
+  1519→                        "risk_category": f.risk_category.value if f.risk_category else None,
+  1520→                        "title": f.title,
+  1521→                        "description": f.description,
+  1522→                        "affected_system": f.affected_system,
+  1523→                        "affected_table": f.affected_table,
+  1524→                        "affected_row_count": f.affected_row_count,
+  1525→                        "edi_standard": f.edi_standard.value if f.edi_standard else None,
+  1526→                        "detected_at": f.detected_at.isoformat() if f.detected_at else None,
+  1527→                        "remediated_at": f.remediated_at.isoformat() if f.remediated_at else None,
+  1528→                        "assignee": f.assignee,
+  1529→                        "current_timeout_hours": f.current_timeout_hours,
+  1530→                        "state_last_changed_at": f.state_last_changed_at.isoformat() if f.state_last_changed_at else None,
+  1531→                    }
+  1532→                    for f in findings
+  1533→                ],
+  1534→            )
+  1535→
+  1536→    @app.get(
+  1537→        "/api/v1/policies",
+  1538→        response_model=PoliciesListResponse,
+  1539→        tags=["policies"],
+  1540→    )
+  1541→    async def list_policies(
+  1542→        enabled_only: bool = Query(False),
+  1543→        limit: int = Query(50, ge=1, le=500),
+  1544→        offset: int = Query(0, ge=0),
+  1545→    ):
+  1546→        """List masking policies with optional filtering.
+  1547→
+  1548→        Returns all MaskingPolicy records from the compliance database.
+  1549→        """
+  1550→        with _session_factory() as session:
+  1551→            query = session.query(MaskingPolicy)
+  1552→            if enabled_only:
+  1553→                query = query.filter(MaskingPolicy.enabled == True)  # noqa: E712
+  1554→
+  1555→            total = query.count()
+  1556→            policies = query.order_by(MaskingPolicy.created_at.desc()).offset(offset).limit(limit).all()
+  1557→
+  1558→            return PoliciesListResponse(
+  1559→                total=total,
+  1560→                policies=[
+  1561→                    {
+  1562→                        "id": p.id,
+  1563→                        "name": p.name,
+  1564→                        "field_name": p.field_name,
+  1565→                        "field_category": p.field_category.value if p.field_category else None,
+  1566→                        "action": p.action.value if p.action else None,
+  1567→                        "parameters": p.parameters,
+  1568→                        "gdpr_article": p.gdpr_article,
+  1569→                        "enabled": p.enabled,
+  1570→                        "created_at": p.created_at.isoformat() if p.created_at else None,
+  1571→                        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+  1572→                    }
+  1573→                    for p in policies
+  1574→                ],
+  1575→            )
+  1576→
+  1577→    @app.get(
+  1578→        "/api/v1/reports",
+  1579→        response_model=list[ComplianceReportResponse],
+  1580→        tags=["reports"],
+  1581→    )
+  1582→    async def list_reports(
+  1583→        limit: int = Query(20, ge=1, le=100),
+  1584→    ):
+  1585→        """List compliance summary reports.
+  1586→
+  1587→        Returns periodic compliance reports with finding counts
+  1588→        and MTTR metrics.
+  1589→        """
+  1590→        with _session_factory() as session:
+  1591→            reports = (
+  1592→                session.query(ComplianceReport)
+  1593→                .order_by(ComplianceReport.generated_at.desc())
+  1594→                .limit(limit)
+  1595→                .all()
+  1596→            )
+  1597→
+  1598→            return [
+  1599→                ComplianceReportResponse(
+  1600→                    id=r.id,
+  1601→                    report_period_start=r.report_period_start,
+  1602→                    report_period_end=r.report_period_end,
+  1603→                    total_findings=r.total_findings,
+  1604→                    critical_count=r.critical_count,
+  1605→                    high_count=r.high_count,
+  1606→                    medium_count=r.medium_count,
+  1607→                    low_count=r.low_count,
+  1608→                    remediated_count=r.remediated_count,
+  1609→                    avg_mttr_hours=r.avg_mttr_hours,
+  1610→                    summary=r.summary,
+  1611→                )
+  1612→                for r in reports
+  1613→            ]
+  1614→
+  1615→
+  1616→# ══════════════════════════════════════════════════════════════════════════
+  1617→#  5. STATE MACHINE
+  1618→# ══════════════════════════════════════════════════════════════════════════
+  1619→
+  1620→def _register_state_machine_routes(app: FastAPI):
+  1621→
+  1622→    @app.get(
+  1623→        "/api/v1/state-machine/definition",
+  1624→        response_model=StateMachineDefinition,
+  1625→        tags=["5. State Machine"],
+  1626→    )
+  1627→    async def sm_definition():
+  1628→        """Get the complete state machine definition.
+  1629→
+  1630→        Returns all states, valid transitions, timeout rules,
+  1631→        triggers, and actors. Use this to render a state
+  1632→        diagram in the frontend.
+  1633→        """
+  1634→        return _state_machine.get_full_definition()
+  1635→
+  1636→    @app.get(
+  1637→        "/api/v1/state-machine/transitions/{finding_id}/available",
+  1638→        response_model=ValidTransitionsResponse,
+  1639→        tags=["5. State Machine"],
+  1640→    )
+  1641→    async def sm_available_transitions(finding_id: str):
+  1642→        """Get valid transitions from a finding's current state."""
+  1643→        with _session_factory() as session:
+  1644→            finding = session.query(AuditFinding).filter(
+  1645→                AuditFinding.id == finding_id
+  1646→            ).first()
+  1647→            if not finding:
+  1648→                raise HTTPException(status_code=404, detail=f"Finding '{finding_id}' not found")
+  1649→
+  1650→            current = finding.state.value if finding.state else "detected"
+  1651→            transitions = _state_machine.get_valid_transitions(current)
+  1652→
+  1653→            return ValidTransitionsResponse(
+  1654→                current_state=current,
+  1655→                transitions=transitions,
+  1656→            )
+  1657→
+  1658→    @app.post(
+  1659→        "/api/v1/state-machine/transitions/{finding_id}",
+  1660→        response_model=TransitionResponse,
+  1661→        responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+  1662→        tags=["5. State Machine"],
+  1663→    )
+  1664→    async def sm_transition(finding_id: str, req: TransitionRequest):
+  1665→        """Transition a finding to a new state.
+  1666→
+  1667→        Validates the transition against the state machine definition,
+  1668→        enforces guard conditions, records the transition audit trail,
+  1669→        and emits events for the reaction engine.
+  1670→        """
+  1671→        with _session_factory() as session:
+  1672→            finding = session.query(AuditFinding).filter(
+  1673→                AuditFinding.id == finding_id
+  1674→            ).first()
+  1675→            if not finding:
+  1676→                raise HTTPException(status_code=404, detail=f"Finding '{finding_id}' not found")
+  1677→
+  1678→            current = finding.state.value if finding.state else "detected"
+  1679→            severity = finding.severity.value if finding.severity else "medium"
+  1680→
+  1681→            result = _state_machine.transition(
+  1682→                finding_id=finding_id,
+  1683→                current_state=current,
+  1684→                target_state=req.target_state.value,
+  1685→                trigger=req.trigger,
+  1686→                actor=req.actor,
+  1687→                context={
+  1688→                    **req.context,
+  1689→                    "severity": severity,
+  1690→                    "finding_ref": finding.finding_ref,
+  1691→                    "risk_category": finding.risk_category.value if finding.risk_category else None,
+  1692→                },
+  1693→                severity=severity,
+  1694→                session=session,
+  1695→            )
+  1696→
+  1697→            if result.success:
+  1698→                # Update finding state
+  1699→                finding.state = FindingState(req.target_state.value)
+  1700→                finding.state_last_changed_at = datetime.now(timezone.utc)
+  1701→                finding.current_timeout_hours = result.timeout_hours
+  1702→                if req.context.get("assignee"):
+  1703→                    finding.assignee = req.context["assignee"]
+  1704→
+  1705→                # Map state to legacy status for backward compatibility
+  1706→                state_to_status = {
+  1707→                    "detected": AuditStatus.OPEN,
+  1708→                    "triaged": AuditStatus.IN_PROGRESS,
+  1709→                    "assigned": AuditStatus.IN_PROGRESS,
+  1710→                    "in_remediation": AuditStatus.IN_PROGRESS,
+  1711→                    "awaiting_verification": AuditStatus.REMEDIATED,
+  1712→                    "escalated": AuditStatus.IN_PROGRESS,
+  1713→                    "risk_accepted": AuditStatus.ACCEPTED_RISK,
+  1714→                    "verified": AuditStatus.REMEDIATED,
+  1715→                    "closed": AuditStatus.REMEDIATED,
+  1716→                    "false_positive": AuditStatus.FALSE_POSITIVE,
+  1717→                }
+  1718→                finding.status = state_to_status.get(req.target_state.value, AuditStatus.OPEN)
+  1719→
+  1720→                session.commit()
+  1721→
+  1722→                # Emit event to the bus
+  1723→                _event_bus.publish(
+  1724→                    EventType.FINDING_STATE_CHANGED,
+  1725→                    payload={
+  1726→                        "finding_id": finding_id,
+  1727→                        "finding_ref": finding.finding_ref,
+  1728→                        "from_state": current,
+  1729→                        "to_state": req.target_state.value,
+  1730→                        "trigger": req.trigger,
+  1731→                        "actor": req.actor,
+  1732→                        "severity": severity,
+  1733→                        "risk_category": finding.risk_category.value if finding.risk_category else None,
+  1734→                        "title": finding.title,
+  1735→                    },
+  1736→                    source="state_machine",
+  1737→                    correlation_id=finding_id,
+  1738→                )
+  1739→
+  1740→                # Process events synchronously for immediate reactions
+  1741→                _event_bus.process_pending()
+  1742→
+  1743→            return TransitionResponse(
+  1744→                success=result.success,
+  1745→                finding_id=result.finding_id,
+  1746→                from_state=result.from_state,
+  1747→                to_state=result.to_state,
+  1748→                trigger=result.trigger,
+  1749→                actor=result.actor,
+  1750→                transition_id=result.transition_id,
+  1751→                error=result.error,
+  1752→                guard_failed=result.guard_failed,
+  1753→                auto_escalated=result.auto_escalated,
+  1754→                timeout_hours=result.timeout_hours,
+  1755→                context=result.context,
+  1756→            )
+  1757→
+  1758→    @app.get(
+  1759→        "/api/v1/state-machine/transitions/{finding_id}/timeline",
+  1760→        response_model=FindingTimelineResponse,
+  1761→        tags=["5. State Machine"],
+  1762→    )
+  1763→    async def sm_timeline(finding_id: str):
+  1764→        """Get the full state transition timeline for a finding."""
+  1765→        with _session_factory() as session:
+  1766→            finding = session.query(AuditFinding).filter(
+  1767→                AuditFinding.id == finding_id
+  1768→            ).first()
+  1769→            if not finding:
+  1770→                raise HTTPException(status_code=404, detail=f"Finding '{finding_id}' not found")
+  1771→
+  1772→            transitions = (
+  1773→                session.query(FindingTransition)
+  1774→                .filter(FindingTransition.finding_id == finding_id)
+  1775→                .order_by(FindingTransition.transitioned_at.asc())
+  1776→                .all()
+  1777→            )
+  1778→
+  1779→            return FindingTimelineResponse(
+  1780→                finding_id=finding_id,
+  1781→                current_state=finding.state.value if finding.state else "detected",
+  1782→                total_transitions=len(transitions),
+  1783→                transitions=[
+  1784→                    TransitionInfo(
+  1785→                        id=t.id,
+  1786→                        from_state=t.from_state,
+  1787→                        to_state=t.to_state,
+  1788→                        trigger=t.trigger,
+  1789→                        actor=t.actor,
+  1790→                        guard_failed=t.guard_failed,
+  1791→                        auto_escalated=t.auto_escalated,
+  1792→                        timeout_hours=t.timeout_hours,
+  1793→                        context_payload=t.context_payload or {},
+  1794→                        transitioned_at=t.transitioned_at.isoformat() if t.transitioned_at else "",
+  1795→                    )
+  1796→                    for t in transitions
+  1797→                ],
+  1798→            )
+  1799→
+  1800→    @app.post(
+  1801→        "/api/v1/state-machine/timeout-check",
+  1802→        response_model=TimeoutCheckResponse,
+  1803→        tags=["5. State Machine"],
+  1804→    )
+  1805→    async def sm_check_timeouts():
+  1806→        """Check all open findings for timeout breaches and auto-escalate.
+  1807→
+  1808→        This is the entry point for the SLA enforcement mechanism.
+  1809→        Call periodically (e.g., every 5 minutes) or on-demand.
+  1810→        """
+  1811→        with _session_factory() as session:
+  1812→            # Find all non-terminal findings
+  1813→            terminal_states = {"closed", "false_positive"}
+  1814→            findings = (
+  1815→                session.query(AuditFinding)
+  1816→                .filter(AuditFinding.state.isnot(None))
+  1817→                .all()
+  1818→            )
+  1819→
+  1820→            finding_dicts = [
+  1821→                {
+  1822→                    "id": f.id,
+  1823→                    "state": f.state.value if f.state else "detected",
+  1824→                    "severity": f.severity.value if f.severity else "medium",
+  1825→                    "detected_at": f.state_last_changed_at or f.detected_at,
+  1826→                    "finding_ref": f.finding_ref,
+  1827→                }
+  1828→                for f in findings
+  1829→                if f.state and f.state.value not in terminal_states
+  1830→            ]
+  1831→
+  1832→            escalations = _state_machine.check_timeouts(finding_dicts, session)
+  1833→
+  1834→            # Update findings that were escalated
+  1835→            for esc in escalations:
+  1836→                if esc.success:
+  1837→                    finding = session.query(AuditFinding).filter(
+  1838→                        AuditFinding.id == esc.finding_id
+  1839→                    ).first()
+  1840→                    if finding:
+  1841→                        finding.state = FindingState.ESCALATED
+  1842→                        finding.state_last_changed_at = datetime.now(timezone.utc)
+  1843→
+  1844→                        # Emit timeout breach event
+  1845→                        _event_bus.publish(
+  1846→                            EventType.FINDING_TIMEOUT_BREACH,
+  1847→                            payload={
+  1848→                                "finding_id": esc.finding_id,
+  1849→                                "from_state": esc.from_state,
+  1850→                                "to_state": "escalated",
+  1851→                                "severity": esc.context.get("severity", "medium"),
+  1852→                                "elapsed_hours": esc.context.get("elapsed_hours"),
+  1853→                                "timeout_hours": esc.context.get("timeout_hours"),
+  1854→                            },
+  1855→                            source="state_machine",
+  1856→                            correlation_id=esc.finding_id,
+  1857→                        )
+  1858→
+  1859→            session.commit()
+  1860→            _event_bus.process_pending()
+  1861→
+  1862→            return TimeoutCheckResponse(
+  1863→                findings_checked=len(finding_dicts),
+  1864→                auto_escalated=len(escalations),
+  1865→                escalations=[
+  1866→                    TransitionResponse(
+  1867→                        success=e.success,
+  1868→                        finding_id=e.finding_id,
+  1869→                        from_state=e.from_state,
+  1870→                        to_state=e.to_state,
+  1871→                        trigger=e.trigger,
+  1872→                        actor=e.actor,
+  1873→                        transition_id=e.transition_id,
+  1874→                        auto_escalated=e.auto_escalated,
+  1875→                        context=e.context,
+  1876→                    )
+  1877→                    for e in escalations
+  1878→                ],
+  1879→            )
+  1880→
+  1881→
+  1882→# ══════════════════════════════════════════════════════════════════════════
+  1883→#  6. EVENT BUS & REACTION ENGINE
+  1884→# ══════════════════════════════════════════════════════════════════════════
+  1885→
+  1886→def _register_event_bus_routes(app: FastAPI):
+  1887→
+  1888→    @app.get(
+  1889→        "/api/v1/events/stats",
+  1890→        response_model=EventBusStatsResponse,
+  1891→        tags=["6. Event Bus"],
+  1892→    )
+  1893→    async def event_bus_stats():
+  1894→        """Get event bus statistics including transport mode and queue depth."""
+  1895→        stats = _event_bus.get_statistics()
+  1896→        return EventBusStatsResponse(**stats)
+  1897→
+  1898→    @app.get(
+  1899→        "/api/v1/events",
+  1900→        response_model=list[EventSchema],
+  1901→        tags=["6. Event Bus"],
+  1902→    )
+  1903→    async def list_events(
+  1904→        event_type: Optional[str] = Query(None),
+  1905→        correlation_id: Optional[str] = Query(None),
+  1906→        limit: int = Query(50, ge=1, le=200),
+  1907→    ):
+  1908→        """List recent events from the event store.
+  1909→
+  1910→        Supports filtering by event type and correlation ID.
+  1911→        """
+  1912→        events = _event_bus._store.get_recent(
+  1913→            event_type=event_type,
+  1914→            correlation_id=correlation_id,
+  1915→            limit=limit,
+  1916→        )
+  1917→        return [EventSchema(**e.to_dict()) for e in events]
+  1918→
+  1919→    @app.post(
+  1920→        "/api/v1/events/publish",
+  1921→        tags=["6. Event Bus"],
+  1922→    )
+  1923→    async def publish_event(req: PublishEventRequest):
+  1924→        """Manually publish an event to the bus.
+  1925→
+  1926→        Useful for testing reactions and integrating external systems.
+  1927→        """
+  1928→        event = _event_bus.publish(
+  1929→            event_type=req.event_type,
+  1930→            payload=req.payload,
+  1931→            source=req.source,
+  1932→            correlation_id=req.correlation_id,
+  1933→            metadata=req.metadata,
+  1934→        )
+  1935→        _event_bus.process_pending()
+  1936→        return {"event_id": event.event_id, "status": "published"}
+  1937→
+  1938→    @app.get(
+  1939→        "/api/v1/reactions/rules",
+  1940→        response_model=list[ReactionRuleInfo],
+  1941→        tags=["6. Event Bus"],
+  1942→    )
+  1943→    async def list_reaction_rules(
+  1944→        include_disabled: bool = Query(False),
+  1945→    ):
+  1946→        """List all reaction rules with their status and execution counts."""
+  1947→        rules = _reaction_engine.get_rules(include_disabled=include_disabled)
+  1948→        return [ReactionRuleInfo(**r) for r in rules]
+  1949→
+  1950→    @app.get(
+  1951→        "/api/v1/reactions/stats",
+  1952→        response_model=ReactionEngineStatsResponse,
+  1953→        tags=["6. Event Bus"],
+  1954→    )
+  1955→    async def reaction_stats():
+  1956→        """Get reaction engine statistics."""
+  1957→        stats = _reaction_engine.get_statistics()
+  1958→        return ReactionEngineStatsResponse(**stats)
+  1959→
+  1960→    @app.get(
+  1961→        "/api/v1/reactions/log",
+  1962→        tags=["6. Event Bus"],
+  1963→    )
+  1964→    async def reaction_log(limit: int = Query(20, ge=1, le=100)):
+  1965→        """Get recent reaction execution log."""
+  1966→        return _reaction_engine.get_recent_reactions(limit=limit)
+  1967→
+  1968→    @app.put(
+  1969→        "/api/v1/reactions/rules/{rule_id}/toggle",
+  1970→        tags=["6. Event Bus"],
+  1971→    )
+  1972→    async def toggle_reaction_rule(rule_id: str, enabled: bool = Query(...)):
+  1973→        """Enable or disable a specific reaction rule."""
+  1974→        if enabled:
+  1975→            ok = _reaction_engine.enable_rule(rule_id)
+  1976→        else:
+  1977→            ok = _reaction_engine.disable_rule(rule_id)
+  1978→        if not ok:
+  1979→            raise HTTPException(status_code=404, detail=f"Rule '{rule_id}' not found")
+  1980→        return {"rule_id": rule_id, "enabled": enabled}
+  1981→

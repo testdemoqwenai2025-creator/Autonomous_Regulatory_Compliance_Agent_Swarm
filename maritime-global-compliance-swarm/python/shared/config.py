@@ -103,6 +103,48 @@ class TelemetryConfig:
     retention_days: int = field(default_factory=lambda: int(os.getenv("MTTR_RETENTION_DAYS", "90")))
 
 
+@dataclass(frozen=True)
+class EmissionsConfig:
+    """EU ETS / IMO DCS emissions monitoring settings."""
+    ets_monitoring_enabled: bool = field(default_factory=lambda: os.getenv(
+        "ETS_MONITORING_ENABLED", "true"
+    ).lower() == "true")
+    ets_reporting_deadline_day: int = field(default_factory=lambda: int(
+        os.getenv("ETS_REPORTING_DEADLINE_DAY", "30")
+    ))
+    ets_surrender_percentage: float = field(default_factory=lambda: float(
+        os.getenv("ETS_SURRENDER_PERCENTAGE", "0.70")
+    ))
+    imo_dcs_enabled: bool = field(default_factory=lambda: os.getenv(
+        "IMO_DCS_ENABLED", "true"
+    ).lower() == "true")
+    carbon_registry_sync_url: str = field(default_factory=lambda: os.getenv(
+        "CARBON_REGISTRY_SYNC_URL", ""
+    ))
+    emissions_audit_batch_size: int = field(default_factory=lambda: int(
+        os.getenv("EMISSIONS_AUDIT_BATCH_SIZE", "500")
+    ))
+
+
+@dataclass(frozen=True)
+class SecurityConfig:
+    """JWT and RBAC security settings."""
+    jwt_secret: str = field(default_factory=lambda: os.getenv("JWT_SECRET", ""))
+    jwt_algorithm: str = field(default_factory=lambda: os.getenv("JWT_ALGORITHM", "HS256"))
+    jwt_expiry_hours: int = field(default_factory=lambda: int(
+        os.getenv("JWT_EXPIRY_HOURS", "24")
+    ))
+    rbac_enabled: bool = field(default_factory=lambda: os.getenv(
+        "RBAC_ENABLED", "false"
+    ).lower() == "true")
+    redis_rate_limit_url: str = field(default_factory=lambda: os.getenv(
+        "REDIS_RATE_LIMIT_URL", "redis://localhost:6379/0"
+    ))
+    redis_rate_limit_ttl: int = field(default_factory=lambda: int(
+        os.getenv("REDIS_RATE_LIMIT_TTL", "60")
+    ))
+
+
 @dataclass
 class SwarmConfig:
     """Top-level configuration aggregating all tool configs."""
@@ -111,6 +153,8 @@ class SwarmConfig:
     auditor: AuditorConfig = field(default_factory=AuditorConfig)
     remediation: RemediationConfig = field(default_factory=RemediationConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    emissions: EmissionsConfig = field(default_factory=EmissionsConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     log_file: Optional[str] = field(default_factory=lambda: os.getenv("LOG_FILE", None))
 
