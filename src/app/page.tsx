@@ -9,7 +9,8 @@ import {
   Globe, ArrowRight, Zap, Layers, Monitor,
   Send, CircuitBoard, Wifi, Check, Fingerprint, Thermometer, GanttChart, Gauge,
   ArrowDownLeft, Network, Eye, History, BarChart3,
-  MousePointerClick, Radio, FileClock, Flame,
+  MousePointerClick, Radio, FileClock, Flame, ShieldAlert as ShieldAlertIcon,
+  Key, Settings, Heart, TimerReset,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -1100,7 +1101,42 @@ export default function ComplianceDashboard() {
               </CardContent></Card>
             )}
 
-            {/* Flame/Waterfall chart from last trace result spans */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><ShieldAlertIcon className="w-4 h-4" />Rate Limiter</CardTitle><CardDescription>Token-bucket per IP per endpoint. Health probes bypassed.</CardDescription></CardHeader><CardContent>
+                <div className="text-xs font-mono space-y-1 text-slate-600">
+                  <div className="flex justify-between"><span>/api/compliance/health</span><span>120/min</span></div>
+                  <div className="flex justify-between"><span>/api/compliance/findings</span><span>60/min</span></div>
+                  <div className="flex justify-between"><span>/api/compliance/mttr</span><span>60/min</span></div>
+                  <div className="flex justify-between"><span>/api/compliance/policies</span><span>60/min</span></div>
+                  <div className="flex justify-between"><span>/api/compliance/profiles</span><span>60/min</span></div>
+                  <div className="flex justify-between"><span>/api/compliance/audit</span><span className="text-amber-600 font-medium">10/min</span></div>
+                  <div className="flex justify-between"><span>/api/compliance/remediate</span><span className="text-amber-600 font-medium">10/min</span></div>
+                  <div className="flex justify-between"><span>/api/system/observability/ep-trace</span><span>30/min</span></div>
+                  <div className="flex justify-between text-slate-400"><span>other (default)</span><span>60/min</span></div>
+                </div>
+              </CardContent></Card>
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Settings className="w-4 h-4" />Phase 1 Security Stack</CardTitle></CardHeader><CardContent className="space-y-2">
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>Rate Limiting</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>CSP Headers</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>X-Frame-Options</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>X-Content-Type-Options</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>HSTS (prod)</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>CORS Lockdown</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>API Key Auth</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>JWT + RBAC</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>Key Rotation</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>Health Probes</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>JSON Logging</span></div>
+                  <div className="flex items-center gap-2"><Check className="w-3.5 h-3.5 text-emerald-500" /><span>Config Validation</span></div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-slate-100 text-[10px] text-slate-400 space-y-0.5">
+                  <p><strong>Auth:</strong> X-API-Key / Bearer JWT | Roles: viewer, analyst, operator, admin</p>
+                  <p><strong>Health:</strong> /health/live (liveness) + /health/ready (DB+deps)</p>
+                  <p><strong>Config:</strong> /api/system/config | <strong>Limits:</strong> /api/system/rate-limits</p>
+                </div>
+              </CardContent></Card>
+            </div>
             {epResult && epResult.summary.endpointsHit > 0 && (
               <Card><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Flame className="w-4 h-4" />Endpoint Waterfall — All Components Correlated</CardTitle><CardDescription>Browser timing (TTFB, round-trip, DNS, TCP, SSL, transfer) correlated with server middleware, handler, and DB timings per endpoint.</CardDescription></CardHeader><CardContent>
                 <div className="overflow-x-auto">
@@ -1339,6 +1375,13 @@ export default function ComplianceDashboard() {
               { method: 'POST', path: '/api/compliance/remediate', desc: 'Generate remediation policies', live: false },
               { method: 'GET', path: '/api/system/observability/ep-trace', desc: 'Full-site observability trace (all endpoints)', live: true },
               { method: 'GET', path: '/api/system/observability/ep-trace?mode=summary', desc: 'Aggregate stats across all traces', live: false },
+              { method: 'GET', path: '/health/live', desc: 'Liveness probe (no DB)', live: false },
+              { method: 'GET', path: '/health/ready', desc: 'Readiness probe (DB + deps check)', live: false },
+              { method: 'POST', path: '/api/auth/login', desc: 'Authenticate, get JWT + API key', live: false },
+              { method: 'GET', path: '/api/auth/me', desc: 'Current user profile (auth required)', live: false },
+              { method: 'POST', path: '/api/auth/rotate', desc: 'Rotate API key (auth required)', live: false },
+              { method: 'GET', path: '/api/system/rate-limits', desc: 'Rate limiter config + live bucket stats', live: false },
+              { method: 'GET', path: '/api/system/config', desc: 'Runtime config validation', live: false },
             ].map(ep => (
               <div key={ep.path + ep.method} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50">
                 <Badge variant="outline" className={`font-mono text-xs w-14 justify-center ${ep.method === 'GET' ? 'text-emerald-700 border-emerald-300' : 'text-blue-700 border-blue-300'}`}>{ep.method}</Badge>

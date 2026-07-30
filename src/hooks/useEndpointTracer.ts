@@ -349,8 +349,9 @@ export function useEndpointTracer() {
     const traceId = generateTraceId();
     const traceStart = performance.now();
 
-    // Default: all site endpoints
+    // Default: all site endpoints including Phase 1 auth/rate-limit/health
     const endpoints = customEndpoints ?? [
+      // Core compliance
       { url: '/api/compliance/health', method: 'GET' },
       { url: '/api/compliance/findings', method: 'GET' },
       { url: '/api/compliance/mttr', method: 'GET' },
@@ -359,8 +360,15 @@ export function useEndpointTracer() {
       { url: '/api/compliance/audit', method: 'POST' },
       { url: '/api/compliance/remediate', method: 'POST' },
       { url: '/api/compliance/anonymise', method: 'POST' },
+      // System / observability
       { url: '/api/system/ping', method: 'GET' },
       { url: '/api/system/correlated-trace', method: 'GET' },
+      // Phase 1: Auth endpoints
+      { url: '/api/auth/login', method: 'POST' },
+      { url: '/api/auth/verify', method: 'POST' },
+      // Phase 1: Health probes
+      { url: '/health/live', method: 'GET' },
+      { url: '/health/ready', method: 'GET' },
     ];
 
     // Hit all endpoints in parallel and collect spans
