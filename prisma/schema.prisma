@@ -340,6 +340,12 @@ model EndpointTrace {
   serverDbWriteAvgMs  Float               @default(0)
   serverDbReadAvgMs   Float               @default(0)
   totalEndToEndMs     Int                 @default(0)
+  authMethod          String              @default("")  // api_key | jwt | none
+  authUserId          String              @default("")
+  authRole            String              @default("")
+  rateLimitLimit      Int                 @default(0)
+  rateLimitRemaining  Int                 @default(0)
+  configValid         Boolean             @default(true)
   createdAt           DateTime            @default(now())
 
   spans               EndpointTraceSpan[]
@@ -380,6 +386,9 @@ model EndpointTraceSpan {
   browserOverheadMs   Int                 @default(0)   // roundTripMs - ttfbMs
 
   error               String              @default("")
+  rateLimitLimit      Int                 @default(0)
+  rateLimitRemaining  Int                 @default(0)
+  authMethod          String              @default("")
   createdAt           DateTime            @default(now())
 
   trace               EndpointTrace       @relation(fields: [traceId], references: [traceId], onDelete: Cascade)
@@ -387,4 +396,75 @@ model EndpointTraceSpan {
   @@index([traceId])
   @@index([endpoint])
   @@index([statusCode])
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PHASE 2: INTELLIGENCE — Anomaly Detection & Predictive MTTR
+// ═══════════════════════════════════════════════════════════════
+
+model AnomalyBaseline {
+  id              String   @id @default(cuid())
+  metricName      String   @unique  // e.g. "edi_volume_per_hour", "pii_density", "compliance_rate"
+  dataSource      String   @default("")
+  meanValue       Float
+  stdDev          Float
+  sampleCount     Int      @default(0)
+  lastUpdated     DateTime @default(now())
+  windowMinutes   Int      @default(60)
+
+  detections      AnomalyDetection[]
+
+  @@index([metricName])
+}
+
+model AnomalyDetection {
+  id              String   @id @default(cuid())
+  metricName      String
+  observedValue   Float
+  baselineMean    Float
+  baselineStdDev  Float
+  zScore          Float
+  threshold       Float   @default(2.0)
+  severity        String   @default("info")  // info | warning | critical
+  direction       String   @default("above")  // above | below
+  acknowledged    Boolean  @default(false)
+  dataSource      String   @default("")
+  contextPayload  String   @default("{}")  // JSON: extra context
+  createdAt       DateTime @default(now())
+
+  baseline        AnomalyBaseline @relation(fields: [metricName], references: [metricName])
+
+  @@index([metricName])
+  @@index([severity])
+  @@index([acknowledged])
+  @@index([createdAt])
+}
+
+model PredictiveMttr {
+  id              String   @id @default(cuid())
+  riskCategory    String
+  severity        String
+  predictedMttrH  Float
+  confidence      Float   @default(0)
+  features        String   @default("{}")  // JSON: {avg_mttr, p95, sample_count, trend_slope}
+  createdAt       DateTime @default(now())
+
+  @@index([riskCategory])
+  @@index([severity])
+}
+
+model ComplianceReport {
+  id              String   @id @default(cuid())
+  reportType      String   @default("daily")  // daily | weekly | monthly
+  generatedAt     DateTime @default(now())
+  periodStart     DateTime
+  periodEnd       DateTime
+  totalFindings   Int      @default(0)
+  resolvedFindings Int      @default(0)
+  openFindings    Int      @default(0)
+  avgMttrHours    Float   @default(0)
+  complianceRate  Float   @default(0)
+  topRiskCategories String  @default("[]")  // JSON
+  anomaliesInPeriod Int     @default(0)
+  summaryJson     String   @default("{}")
 }

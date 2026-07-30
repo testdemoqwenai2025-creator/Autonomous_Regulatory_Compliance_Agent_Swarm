@@ -224,6 +224,12 @@ export async function POST(request: NextRequest) {
       serverDbWriteAvgMs: avg(dbWriteValues),
       serverDbReadAvgMs: avg(dbReadValues),
       totalEndToEndMs: (browserMetrics.roundTripAvgMs as number) ?? Math.round(avg(roundTripValues)),
+      authMethod: (body.authMethod as string) ?? '',
+      authUserId: (body.authUserId as string) ?? '',
+      authRole: (body.authRole as string) ?? '',
+      rateLimitLimit: parseInt(request.headers.get('x-ratelimit-limit') ?? '0', 10),
+      rateLimitRemaining: parseInt(request.headers.get('x-ratelimit-remaining') ?? '0', 10),
+      configValid: true,
       spans: {
         create: spans.map(s => {
           const ttfb = (s.clientTtfbMs as number) ?? 0;
@@ -253,6 +259,9 @@ export async function POST(request: NextRequest) {
             networkTransitMs: Math.max(0, ttfb - sMw - sHandler),
             browserOverheadMs: Math.max(0, rt - ttfb),
             error: (s.error as string) ?? '',
+            rateLimitLimit: (s.rateLimitLimit as number) ?? 0,
+            rateLimitRemaining: (s.rateLimitRemaining as number) ?? 0,
+            authMethod: (s.authMethod as string) ?? '',
           };
         }),
       },

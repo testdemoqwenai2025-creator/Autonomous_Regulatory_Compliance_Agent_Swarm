@@ -113,6 +113,12 @@ export interface StoredEndpointTrace {
   serverDbWriteAvgMs: number;
   serverDbReadAvgMs: number;
   totalEndToEndMs: number;
+  authMethod: string;
+  authUserId: string;
+  authRole: string;
+  rateLimitLimit: number;
+  rateLimitRemaining: number;
+  configValid: boolean;
   createdAt: string;
   spans: StoredSpan[];
 }
@@ -140,6 +146,9 @@ export interface StoredSpan {
   networkTransitMs: number;
   browserOverheadMs: number;
   error: string;
+  rateLimitLimit: number;
+  rateLimitRemaining: number;
+  authMethod: string;
 }
 
 export interface TraceSummary {
@@ -301,6 +310,8 @@ export function useEndpointTracer() {
       // Get Resource Timing
       const rt = getResourceTimingForUrl(url);
 
+      const rlLimit = parseInt(res.headers.get('x-ratelimit-limit') ?? '0', 10);
+      const rlRemaining = parseInt(res.headers.get('x-ratelimit-remaining') ?? '0', 10);
       return {
         endpoint: url,
         method,
@@ -321,6 +332,9 @@ export function useEndpointTracer() {
         serverHandlerMs,
         serverDbWriteMs,
         serverDbReadMs,
+        rateLimitLimit: rlLimit,
+        rateLimitRemaining: rlRemaining,
+        authMethod: '',
       };
     } catch (err) {
       return {
@@ -334,6 +348,7 @@ export function useEndpointTracer() {
         clientJsonParseMs: 0, clientTransferSize: 0, clientEncodedSize: 0, clientDecodedSize: 0,
         clientProtocol: '',
         serverMiddlewareMs, serverHandlerMs, serverDbWriteMs, serverDbReadMs,
+        rateLimitLimit: 0, rateLimitRemaining: 0, authMethod: '',
         error: err instanceof Error ? err.message : String(err),
       };
     }
@@ -366,6 +381,11 @@ export function useEndpointTracer() {
       // Phase 1: Auth endpoints
       { url: '/api/auth/login', method: 'POST' },
       { url: '/api/auth/verify', method: 'POST' },
+      // Phase 2: Intelligence endpoints
+      { url: '/api/intelligence/anomaly-detect', method: 'POST' },
+      { url: '/api/intelligence/predictive-mttr', method: 'POST' },
+      { url: '/api/intelligence/compliance-report', method: 'POST' },
+      { url: '/api/intelligence/risk-score', method: 'POST' },
       // Phase 1: Health probes
       { url: '/health/live', method: 'GET' },
       { url: '/health/ready', method: 'GET' },
