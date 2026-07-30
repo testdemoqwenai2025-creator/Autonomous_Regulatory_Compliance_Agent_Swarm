@@ -1,10 +1,12 @@
 # Maritime Global Compliance Swarm
 
-> Autonomous regulatory compliance agent swarm for global maritime freight. Automates GDPR/PII anonymisation, EDI compliance audits, remediation policy generation, MTTR telemetry, finding state machine governance, and event-driven reactive compliance — all exposed via a unified Python FastAPI gateway with an interactive HTML dashboard.
+> **v3.1** — Autonomous regulatory compliance agent swarm for global maritime freight. Automates GDPR/PII anonymisation, EDI compliance audits, remediation policy generation, MTTR telemetry, finding state machine governance, and event-driven reactive compliance — all exposed via a unified Python FastAPI gateway with an interactive HTML dashboard.
 
 ---
 
 ## Functioning Preview Endpoint
+
+> **This section is permanent.** It proves frontend-backend and all component communication progress. It MUST always feature in this README for every version going forward.
 
 The live frontend-backend communication can be verified at any time via the **Frontend Status** endpoint. This is the single endpoint that confirms the frontend can reach every backend component and proves end-to-end event flow:
 
@@ -32,7 +34,7 @@ curl -s http://localhost:8000/api/v1/system/frontend-status | python3 -m json.to
 {
   "status": "operational",
   "timestamp": "2026-07-30T10:15:00+00:00",
-  "gateway_version": "3.0.0",
+  "gateway_version": "3.1.0",
   "services": {
     "database": {"status": "ok", "detail": "read/write verified"},
     "state_machine": {"status": "ok", "states": 10, "transitions": 20, "detail": "10 states, 20 transitions, callback bridge active"},
@@ -56,7 +58,7 @@ curl -s http://localhost:8000/api/v1/system/frontend-status | python3 -m json.to
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                    Maritime Compliance Swarm v3.0                    │
+│                    Maritime Compliance Swarm v3.1                    │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                       │
 │  ┌──────────────────────┐  ┌───────────────────────────────┐         │
@@ -599,6 +601,17 @@ See SKILLS.md for the detailed capability-by-capability evolution path, and the 
 - **CORS** — currently wildcard; lock to your frontend domain in production.
 - **Rate limiting** — token-bucket middleware available (100 req/min default, configurable).
 - **Audit logging** — structured audit log middleware captures every request with request ID, timestamp, and response status.
+
+---
+
+## Documentation & Strategic Roadmap
+
+| Document | Path | Description |
+|----------|------|-------------|
+| Strategic Roadmap | `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx` | 6-horizon evolution plan (2025-2035), three-tier analysis, investment framework |
+| Workflow Diagram | `docs/workflow_diagram.mmd` / `.png` | 10-phase operational workflow |
+| Skills Catalogue | `SKILLS.md` | Full capability reference, evolution horizons, data repository map |
+| Integration Proof | This file (Preview Endpoint above) | Always-on 10-component frontend-backend health verification |
 
 ---
 

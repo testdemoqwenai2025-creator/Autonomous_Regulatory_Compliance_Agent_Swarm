@@ -19,7 +19,9 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 
 ---
 
-## Current Capabilities (v3.0)
+## Current Capabilities (v3.1)
+
+> **v3.1 changes (Phase 2):** Added strategic roadmap document (`docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx`) with 6-horizon evolution plan, three-tier strategic analysis (current state, competitive positioning, technology trajectory), and investment framework. Enhanced Frontend-Backend Integration Verification section with always-on preview endpoint contract. Updated project documentation to reflect production-ready integration patterns.
 
 ### 1. Manifest PII Anonymiser (Python)
 
@@ -142,10 +144,11 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 - **Compliance use cases** — route deviation detection, AIS gap identification, positional integrity verification
 - **Production target** — multi-provider failover (exactEarth, Spire, ORBCOMM), back-pressure management, error recovery
 
-### 13. API Gateway + Dashboard (Python FastAPI) ★ UPDATED in v3.0
+### 13. API Gateway + Dashboard (Python FastAPI) ★ UPDATED in v3.1
 
 - **45 REST routes** covering all tools, state machine, event bus, reactions, knowledge graph, composite scoring, query registry
-- **Frontend status endpoint** — `GET /api/v1/system/frontend-status` tests 10 backend services and proves end-to-end event flow
+- **Frontend-Backend Integration Verification** — `GET /api/v1/system/frontend-status` is the **always-on preview endpoint** that confirms frontend-backend and all component communication. This endpoint MUST always feature in README.md and is the single source of truth for integration health.
+- **10-component health contract** — the preview endpoint tests: (1) Database read/write, (2) State Machine definition + callback bridge, (3) Event Bus statistics + transport, (4) Reaction Engine rules + actions, (5) Anonymiser HMAC-SHA256 tokenisation, (6) NER Detector spaCy availability, (7) EDI Auditor rule engine, (8) Remediation decision matrix, (9) MTTR Tracker Go service reachability, (10) End-to-end event flow proof (publishes real event, processes through subscriber pipeline)
 - **Connectivity diagnostic** — `GET /api/v1/system/connectivity` provides per-component latency, status, and detail for all 10 components
 - **State machine bridge** — callback on every successful transition auto-publishes `FINDING_STATE_CHANGED` event with full transition context
 - **State machine to Go MTTR bridge** — async HTTP POST forwards transitions to Go service at `/api/v1/events/sm`
@@ -158,9 +161,81 @@ Autonomous regulatory compliance agent swarm for global maritime freight operati
 
 ---
 
+## Frontend-Backend Integration Verification ★ NEW in v3.1
+
+The **preview endpoint** is the contract between the frontend and all backend components. It MUST always be present and functioning in README.md as the primary proof of integration progress.
+
+### Preview Endpoint
+
+```
+GET /api/v1/system/frontend-status
+```
+
+### 10-Component Health Contract
+
+| # | Component | Test Performed | Expected | Dev Without Go |
+|---|-----------|---------------|----------|----------------|
+| 1 | Database | `SELECT 1` read/write probe | `ok` | Required |
+| 2 | State Machine | Load 10-state definition, 20+ transitions, callback bridge | `ok` | Required |
+| 3 | Event Bus | Transport type, event count, subscriber count | `ok` | Required |
+| 4 | Reaction Engine | Active rules count, actions fired | `ok` | Required |
+| 5 | Anonymiser | HMAC-SHA256 tokenisation of probe value | `ok` | Required |
+| 6 | NER Detector | spaCy availability, layer count | `ok` | Required |
+| 7 | EDI Auditor | Rule engine match probe | `ok` | Required |
+| 8 | Remediation | Decision matrix route count | `ok` | Required |
+| 9 | MTTR Tracker (Go) | HTTP GET to Go service `/health` | `ok` | `unavailable` acceptable |
+| 10 | Event Flow | Publish `SYSTEM_HEALTH_CHANGED`, process through subscribers | `ok` | Required |
+
+### Usage
+
+```bash
+# Verify all 10 components and end-to-end event flow
+curl -s http://localhost:8000/api/v1/system/frontend-status | python3 -m json.tool
+
+# Python SDK
+from client import ComplianceSwarmClient
+api = ComplianceSwarmClient(base_url="http://localhost:8000")
+status = api.get_frontend_status()
+print(f"System: {status['status']}, Version: {status['gateway_version']}")
+for name, svc in status['services'].items():
+    print(f"  {name}: {svc['status']} — {svc['detail']}")
+```
+
+### Response Contract
+
+```json
+{
+  "status": "operational" | "degraded",
+  "timestamp": "2025-07-30T12:00:00+00:00",
+  "gateway_version": "3.1.0",
+  "services": {
+    "database": {"status": "ok", "detail": "read/write verified"},
+    "state_machine": {"status": "ok", "states": 10, "transitions": 20, "detail": "..."},
+    "event_bus": {"status": "ok", "transport": "sqlite", "events_stored": 42, "subscribers": 7, "detail": "..."},
+    "reaction_engine": {"status": "ok", "active_rules": 7, "actions_fired": 15, "detail": "..."},
+    "anonymiser": {"status": "ok", "detail": "HMAC-SHA256 tokeniser operational"},
+    "ner_detector": {"status": "ok", "layers": 4, "detail": "..."},
+    "auditor": {"status": "ok", "detail": "rule engine + audit queries loaded"},
+    "remediation": {"status": "ok", "policies": 7, "detail": "..."},
+    "mttr_tracker": {"status": "unavailable", "detail": "Cannot reach Go MTTR tracker at http://localhost:8080"},
+    "event_flow": {"status": "ok", "detail": "Published event abc123... and processed through subscriber pipeline"}
+  }
+}
+```
+
+### Integration Rules
+
+1. **Always present in README.md** — the preview endpoint section must be the first technical section after the project description
+2. **Version-gated** — `gateway_version` field allows frontend to detect API version compatibility
+3. **MTTR graceful degradation** — `unavailable` status for Go service is acceptable in dev (9/10 `ok` = `operational`)
+4. **Event flow proof** — component #10 is NOT a passive check; it publishes a real event and verifies it processes through the subscriber pipeline
+5. **Dashboard integration** — the Backend Status tab calls this endpoint on every tab selection with auto-refresh
+
+---
+
 ## Strategic Evolution Path (6 Horizons, 2025-2035)
 
-The full strategic roadmap with three-tier analysis is in `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx`.
+The full strategic roadmap with three-tier analysis (current state assessment, competitive positioning, technology trajectory) and investment framework is in `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx`.
 
 ### Horizon 1: Foundation Hardening (2025-2026)
 
@@ -368,6 +443,17 @@ The full strategic roadmap with three-tier analysis is in `docs/Strategic_Analys
 | PUT | `/api/v1/reactions/rules/{id}/toggle` | Reactions |
 | GET | `/docs` | Swagger UI |
 | GET | `/redoc` | ReDoc |
+
+---
+
+## Documentation Artifacts
+
+| Document | Path | Description |
+|----------|------|-------------|
+| Strategic Roadmap | `docs/Strategic_Analysis_Maritime_Compliance_Swarm.docx` | 6-horizon evolution plan (2025-2035), three-tier strategic analysis, investment framework |
+| Workflow Diagram | `docs/workflow_diagram.mmd` / `.png` | Mermaid source and rendered 10-phase operational workflow |
+| Skills Reference | `SKILLS.md` | Full capability catalogue, evolution horizons, data repository map |
+| Integration Proof | README.md (Preview Endpoint section) | Always-on 10-component frontend-backend health verification |
 
 ---
 
